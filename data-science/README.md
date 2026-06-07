@@ -14,7 +14,7 @@ PM Accelerator (founded by Dr. Nancy Li) helps aspiring and current Product Mana
 
 ---
 
-## 📋 Project Overview
+## Project Overview
 
 This project analyzes the **Global Weather Repository** dataset (144,627 observations × 52 features, spanning 211 countries, 257 cities, and dates from May 2024 to May 2026) to:
 
@@ -23,71 +23,6 @@ This project analyzes the **Global Weather Repository** dataset (144,627 observa
 3. Build and evaluate multiple time-series forecasting models.
 4. Conduct advanced analyses including anomaly detection, climate pattern analysis, and geographic comparisons.
 5. Document findings with visualizations and actionable insights.
-
----
-
-## Setup & Installation
-
-```bash
-# 1. Clone or unzip the project
-cd WeatherForecastingReport
-
-# 2. Create a virtual environment
-python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-
-# macOS/Linux
-source .venv/bin/activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-```
-
-### Requirements
-
-```
-pandas>=2.0
-numpy>=1.24
-matplotlib>=3.7
-seaborn>=0.12
-scikit-learn>=1.3
-xgboost>=2.0
-lightgbm>=4.0
-statsmodels>=0.14
-prophet>=1.1
-scipy>=1.11
-joblib>=1.3
-flask>=3.0
-```
-
----
-
-## Running the Project
-
-### Full pipeline (all analyses + models):
-
-```bash
-python main.py --data data/GlobalWeatherRepository.csv
-```
-
-### Quick mode (faster local check):
-
-```bash
-python main.py --data data/GlobalWeatherRepository.csv --quick
-```
-
-### Interactive web dashboard:
-
-```bash
-python app.py
-# Open http://localhost:5000
-```
-
-### Jupyter Notebook (pre-executed):
-
-Open `weather_forecasting.ipynb` in JupyterLab or Jupyter Notebook.
 
 ---
 
@@ -105,7 +40,7 @@ Open `weather_forecasting.ipynb` in JupyterLab or Jupyter Notebook.
 
 ---
 
-## 🧹 Data Cleaning & Preprocessing (`src/preprocess.py`)
+## Data Cleaning & Preprocessing (`src/preprocess.py`)
 
 ### Steps Performed
 
@@ -134,7 +69,7 @@ Open `weather_forecasting.ipynb` in JupyterLab or Jupyter Notebook.
 
 ---
 
-## 🔍 Exploratory Data Analysis (`src/explorer.py`)
+## Exploratory Data Analysis (`src/explorer.py`)
 
 ### Temperature Analysis (`figures/01_temperature_analysis.png`)
 
@@ -164,7 +99,7 @@ Strong correlations found:
 
 ---
 
-## 🤖 Forecasting Models (`src/forecasting.py`)
+## Forecasting Models (`src/forecasting.py`)
 
 All models forecast daily-mean `temperature_celsius` using an 80/20 train/test split.
 
@@ -201,7 +136,7 @@ All models forecast daily-mean `temperature_celsius` using an 80/20 train/test s
 
 ---
 
-## 🔬 Advanced Analyses (`src/unique_analyses.py`)
+## Advanced Analyses (`src/unique_analyses.py`)
 
 ### Anomaly Detection (`figures/05_anomaly_detection.png`)
 
