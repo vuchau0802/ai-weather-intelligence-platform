@@ -26,33 +26,7 @@ This project analyzes the **Global Weather Repository** dataset (144,627 observa
 
 ---
 
-## 📁 Project Structure
-
-```
-WeatherForecastingReport/
-├── data/
-│   └── GlobalWeatherRepository.csv       # Raw input dataset (144,627 rows × 52 cols)
-├── src/
-│   ├── preprocess.py                     # Data cleaning & feature engineering pipeline
-│   ├── explorer.py                       # EDA & visualization functions
-│   ├── forecasting.py                    # Forecasting models (SARIMA, Prophet, ML)
-│   └── unique_analyses.py               # Advanced analyses (climate, air quality, spatial)
-├── outputs/
-│   ├── processed_globalweather.csv       # Cleaned & feature-engineered dataset
-│   ├── model_metrics.csv                 # Model evaluation table
-│   ├── analysis_report.md               # Concise auto-generated report
-│   ├── figures/                          # All visualizations (14 PNG files)
-│   └── models/                           # Saved model artifacts (.pkl files)
-├── main.py                               # Entry-point: runs full pipeline
-├── app.py                                # Flask web app for interactive exploration
-├── weather_forecasting.ipynb            # Jupyter notebook (executed)
-├── FULL_REPORT.md                        # 📄 Comprehensive analysis report (this project)
-└── README.md                             # This file
-```
-
----
-
-## 🔧 Setup & Installation
+## Setup & Installation
 
 ```bash
 # 1. Clone or unzip the project
@@ -90,7 +64,7 @@ flask>=3.0
 
 ---
 
-## 🚀 Running the Project
+## Running the Project
 
 ### Full pipeline (all analyses + models):
 
@@ -117,7 +91,7 @@ Open `weather_forecasting.ipynb` in JupyterLab or Jupyter Notebook.
 
 ---
 
-## 📊 Dataset Summary
+## Dataset Summary
 
 | Attribute         | Value                                 |
 |-------------------|---------------------------------------|
@@ -279,58 +253,3 @@ Top predictors of `temperature_celsius`:
 - **Highest precipitation**: Southeast Asia, West Africa.
 - **Continent comparison**: Africa highest mean temp; Europe widest seasonal swing.
 
----
-
-## 📈 Key Insights & Conclusions
-
-1. **Tree-based ML models vastly outperform classical time-series models** (SARIMA, Prophet) for a globally aggregated weather dataset. This is because the dataset mixes both hemispheres (opposing seasons) and many climatic zones, making additive decomposition misleading.
-
-2. **Lag features are the most powerful predictors** — yesterday's temperature alone explains ~35% of variance. This confirms strong temporal autocorrelation in weather data.
-
-3. **The ensemble model achieves the best MAPE (4.08%)**, suggesting that combining RF, XGBoost, and LightGBM provides meaningful complementary signal.
-
-4. **Isolation Forest detected 5% multivariate anomalies** — these correspond to unusual weather events (heat waves, cold snaps, extreme wind-humidity combinations) rather than data errors.
-
-5. **Air quality is strongly weather-dependent**: high temperature + low wind = elevated ozone and particulate matter. This has public health implications for urban planning and emissions policy.
-
-6. **The Global Weather Repository provides excellent coverage** (211 countries) but is biased toward hourly snapshots of capital cities, limiting rural and regional granularity.
-
----
-
-## 🗂️ Outputs Summary
-
-| File                                           | Description                             |
-|------------------------------------------------|-----------------------------------------|
-| `outputs/processed_globalweather.csv`          | Cleaned, feature-engineered dataset     |
-| `outputs/model_metrics.csv`                    | Model evaluation table (6 models)       |
-| `outputs/analysis_report.md`                  | Auto-generated concise report           |
-| `outputs/figures/01_temperature_analysis.png` | Temperature distribution & trends       |
-| `outputs/figures/02_precipitation_analysis.png` | Precipitation patterns               |
-| `outputs/figures/03_correlation_heatmap.png`  | Feature correlation matrix              |
-| `outputs/figures/04_time_trends.png`           | Time-series trends (temp, wind, UV)     |
-| `outputs/figures/05_anomaly_detection.png`     | Anomaly detection results               |
-| `outputs/figures/06_model_comparison.png`      | Forecast vs. actual (all models)        |
-| `outputs/figures/07_feature_importance.png`    | RF & XGBoost feature importance         |
-| `outputs/figures/08_climate_analysis.png`      | Seasonal & monthly climate patterns     |
-| `outputs/figures/09_air_quality_analysis.png`  | Air quality vs. weather correlations    |
-| `outputs/figures/10_feature_importance_analysis.png` | Permutation importance         |
-| `outputs/figures/11_spatial_analysis.png`      | Lat/Lon weather patterns                |
-| `outputs/figures/12_geographical_patterns.png` | Country & continent comparisons         |
-| `outputs/models/randomforest_model.pkl`        | Saved Random Forest model               |
-| `outputs/models/xgboost_model.pkl`             | Saved XGBoost model                     |
-| `outputs/models/lightgbm_model.pkl`            | Saved LightGBM model                    |
-| `outputs/models/prophet_model.pkl`             | Saved Prophet model                     |
-
----
-
-## 📚 References
-
-- [Global Weather Repository — Kaggle](https://www.kaggle.com/datasets/nelgiriyewithana/global-weather-repository)
-- [Prophet — Meta Research](https://facebook.github.io/prophet/)
-- [XGBoost Documentation](https://xgboost.readthedocs.io/)
-- [LightGBM Documentation](https://lightgbm.readthedocs.io/)
-- [PM Accelerator](https://www.pmaccelerator.io/)
-
----
-
-*Report generated as part of the PM Accelerator Data Science Technical Assessment.*
