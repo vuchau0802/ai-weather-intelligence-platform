@@ -383,13 +383,6 @@ All trained models are serialized to disk:
 | `outputs/models/lightgbm_model.pkl`  | LightGBM      | joblib  |
 | `outputs/models/prophet_model.pkl`   | Prophet       | joblib  |
 
-Loading example:
-```python
-import joblib
-rf = joblib.load('outputs/models/randomforest_model.pkl')
-prediction = rf.predict(X_test)
-```
-
 ---
 
 ## 8. Conclusions & Recommendations
@@ -407,27 +400,3 @@ prediction = rf.predict(X_test)
 2. **No pressure/humidity forecasting**: Only temperature was modeled; a full weather forecast system would need multi-target prediction.
 3. **Missing altitude data**: Elevation is a key confound for temperature that isn't directly available.
 4. **Snapshot data, not continuous**: Records are periodic snapshots (not fixed-frequency), requiring resampling that introduces minor information loss.
-
-### Recommended Next Steps
-
-- Apply per-location modeling (one model per city) to leverage SARIMA/Prophet strengths.
-- Incorporate external regressors (ENSO index, NAO, solar activity) for seasonal forecasting.
-- Build a real-time forecasting pipeline with weather API feeds.
-- Deploy the ensemble as a REST endpoint using the saved `.pkl` models.
-- Extend to multi-step ahead forecasting (7-day, 30-day horizons).
-
----
-
-## 9. Runtime & Environment
-
-| Item            | Value                        |
-|-----------------|------------------------------|
-| Total runtime   | 53.4 seconds                 |
-| Python version  | 3.12                         |
-| OS              | Ubuntu 24.04 (sandbox)       |
-| Key libraries   | pandas 2.x, sklearn 1.x, xgboost 2.x, lightgbm 4.x |
-
----
-
-*This report was prepared as part of the PM Accelerator Data Science Technical Assessment.*
-*For questions, contact the PM Accelerator team at [pmaccelerator.io](https://www.pmaccelerator.io).*
