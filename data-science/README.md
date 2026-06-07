@@ -1,10 +1,10 @@
-# 🌍 Weather Trend Forecasting — Global Weather Repository Analysis
+# Weather Trend Forecasting — Global Weather Repository Analysis
 
 **PM Accelerator Data Science / Analyst Technical Assessment**
 
 ---
 
-## 🎯 PM Accelerator Mission
+## PM Accelerator Mission
 
 > *"Our mission is to break down financial barriers and achieve educational fairness. With the goal of establishing 200 schools worldwide over the next 20 years, we aim to empower more kids for a better future in their life and career, simultaneously fostering a diverse landscape in the tech industry."*
 >
