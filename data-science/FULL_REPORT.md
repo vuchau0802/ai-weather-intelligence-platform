@@ -1,11 +1,11 @@
-# 🌍 Weather Trend Forecasting — Full Analysis Report
+# Weather Trend Forecasting — Full Analysis Report
 
 **PM Accelerator | Data Science Technical Assessment**
 **Dataset: Global Weather Repository | 144,627 records | 211 Countries | 2024–2026**
 
 ---
 
-## 🎯 PM Accelerator Mission
+## PM Accelerator Mission
 
 > *"Our mission is to break down financial barriers and achieve educational fairness. With the goal of establishing 200 schools worldwide over the next 20 years, we aim to empower more kids for a better future in their life and career, simultaneously fostering a diverse landscape in the tech industry."*
 
