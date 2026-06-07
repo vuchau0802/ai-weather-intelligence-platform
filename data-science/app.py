@@ -36,7 +36,6 @@ MODEL_METRICS = {
     "Ensemble":    {"MAE":1.190,"RMSE":1.780,"R2":0.9501,"MAPE":4.08},
 }
 
-# ── helpers ──────────────────────────────────────────────────────────────────
 def heat_index(tc, h):
     T,H=tc,h
     return round(-8.78469475556+1.61139411*T+2.33854883889*H-0.14611605*T*H
@@ -113,7 +112,6 @@ def build_alerts(tf, cond, aqi, uv=0, humidity=0, wind=0):
                         "msg":f"Wind speeds {wind:.0f} mph — secure loose objects."})
     return alerts
 
-# ── OWM helpers ───────────────────────────────────────────────────────────────
 def _ow(url, params):
     params["appid"]=OPENWEATHER_KEY
     r=requests.get(url,params=params,timeout=8); r.raise_for_status(); return r.json()
