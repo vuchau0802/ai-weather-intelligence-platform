@@ -668,7 +668,7 @@
             color: var(--sub);
             margin-top: .04rem
         }
-        /* 8-day forecast */
+        /* 10-day forecast */
         
         .fc-row {
             display: grid;
@@ -1205,15 +1205,15 @@
                 </div>
             </div>
 
-            <!-- 8-day OWM -->
+            <!-- 10-day OWM -->
             <div class="card" style="margin-bottom:.8rem">
-                <div class="card-lbl">8-Day Forecast · OpenWeatherMap — Min / Max / Rain Probability</div>
+                <div class="card-lbl">10-Day Forecast · OpenWeatherMap — Min / Max / Rain Probability</div>
                 <div class="fc-row" id="fcRow"></div>
             </div>
 
-            <!-- ML 8-day -->
+            <!-- ML 10-day -->
             <div class="card" style="margin-bottom:.8rem">
-                <div class="card-lbl">8-Day ML Temperature Forecast — Min / Avg / Max</div>
+                <div class="card-lbl">10-Day ML Temperature Forecast — Min / Avg / Max</div>
                 <div class="model-pill" id="modelPill">LightGBM</div>
                 <div class="chart-box h260"><canvas id="mlChart"></canvas></div>
             </div>
@@ -1279,14 +1279,14 @@
                     <div class="chart-box h160" style="margin-top:.65rem"><canvas id="anomalyChart"></canvas></div>
                 </div>
                 <div class="card">
-                    <div class="card-lbl">LightGBM Feature Importance</div>
-                    <div class="chart-box h260" id="fiWrap"><canvas id="fiChart"></canvas></div>
+                    <div class="card-lbl">Pressure + Wind Speed Trend (3-Hourly)</div>
+                    <div class="chart-box h260"><canvas id="pressWindChart"></canvas></div>
                 </div>
             </div>
 
             <div class="card">
-                <div class="card-lbl">ML Forecast Confidence Band — μ ± σ (8-Day)</div>
-                <div class="chart-box h220"><canvas id="bandChart"></canvas></div>
+                <div class="card-lbl">Feels-Like vs Actual Temperature — Comfort Gap (°F)</div>
+                <div class="chart-box h220"><canvas id="feelsGapChart"></canvas></div>
             </div>
         </div>
 
@@ -1332,7 +1332,7 @@
             <!-- Temperature -->
             <div class="tab-pane" id="tabTemp">
                 <div class="card" style="margin-bottom:.8rem">
-                    <div class="card-lbl">Global Temperature Analysis — Time Series + 8-Day Forecast</div>
+                    <div class="card-lbl">Global Temperature Analysis — Time Series + 10-Day Forecast</div>
                     <div class="chart-box h300"><canvas id="fc_tempSeries"></canvas></div>
                 </div>
                 <div class="g2">
@@ -1455,10 +1455,10 @@
                     <div class="card-lbl">Geographic Weather Map · World Cities Temperature</div>
                     <div id="forecastMap"></div>
                     <div class="map-legend" id="mapLegend">
-                        <span class="legend-item"><span class="legend-dot" style="background:#3b82f6"></span>&lt;10°C Cold</span>
-                        <span class="legend-item"><span class="legend-dot" style="background:#22c55e"></span>10–20°C Mild</span>
-                        <span class="legend-item"><span class="legend-dot" style="background:#eab308"></span>20–28°C Warm</span>
-                        <span class="legend-item"><span class="legend-dot" style="background:#ef4444"></span>&gt;28°C Hot</span>
+                        <span class="legend-item"><span class="legend-dot" style="background:#3b82f6"></span>&lt;50°F Cold</span>
+                        <span class="legend-item"><span class="legend-dot" style="background:#22c55e"></span>50–68°F Mild</span>
+                        <span class="legend-item"><span class="legend-dot" style="background:#eab308"></span>68–82°F Warm</span>
+                        <span class="legend-item"><span class="legend-dot" style="background:#ef4444"></span>&gt;82°F Hot</span>
                     </div>
                 </div>
                 <div class="g2">
@@ -1753,7 +1753,7 @@
 
         // ══ BUTTON 2: DS Analysis ══════════════════════════════════════════════════
         async function getAnalysis() {
-            const city = $('cityInput').value.trim() || currentCity;
+            const city = $('cityInput').value.trim() || currentCity || '';
             if (!city) {
                 showErr('City required', 'Search a city first.');
                 return
@@ -1866,26 +1866,28 @@
             const diffSign = diff > 0 ? '+' : `-`;
             const diffCol = diff > 0 ? 'var(--warn)' : diff < 0 ? 'var(--a1)' : 'var(--a3)';
             const diffDir = diff > 0 ? 'warmer than felt' : 'cooler than felt';
+            const diffAbsF = Math.abs(e.temp_feels_diff_abs_f || (diff * 9 / 5)).toFixed(1);
+            const diffDirF = e.temp_feels_diff_dir || diffDir;
             $('engGrid').innerHTML = [
-                ['Heat Index', `${e.heat_index_c}°C`, `${e.heat_index_f}°F`, ''],
-                ['Discomfort', `${e.discomfort}`, 'wind×humidity/100', ''],
-                ['Feels Like', `${e.feels_c}°C`, `${e.feels_f}°F · actual is ${diffSign}${diffAbs}°C ${diffDir}`, diffCol],
+                ['Heat Index', `${e.heat_index_f}°F`, `${e.heat_index_c}°C`, ''],
+                ['Discomfort', `${e.discomfort}`, 'wind × humidity / 100', ''],
+                ['Feels Like', `${e.feels_f}°F`, `${e.feels_c}°C · ${diffSign}${diffAbsF}°F ${diffDirF}`, diffCol],
                 ['Pressure', e.pressure_cat, `${d.current.pressure} hPa`, ''],
                 ['Visibility', e.vis_cat, `${(d.current.visibility/1000).toFixed(1)} km`, ''],
             ].map(([l, v, s, col]) => `<div class="eng-box"><div class="eng-lbl">${l}</div><div class="eng-val" style="${col?'color:'+col:''}">${v}</div><div class="eng-desc">${s}</div></div>`).join('');
 
-            // 8-day OWM
+            // 10-day OWM
             $('fcRow').innerHTML = (d.forecast_owm || []).map(f => `
     <div class="fc-card">
       <div class="fc-date">${f.date}</div>
       <img class="fc-ico" src="https://openweathermap.org/img/wn/${f.icon}.png" alt="${f.description}"/>
       <div class="fc-range">${f.temp_min_f}° / ${f.temp_max_f}°F</div>
-      <div class="fc-avg">${f.temp_avg_c}°C avg</div>
+      <div class="fc-avg">${f.temp_avg_f}°F avg</div>
       <div class="fc-rain">🌧 ${f.rain_prob}%</div>
       <div class="fc-desc">${f.description}</div>
     </div>`).join('');
 
-            // ML 8-day chart — min/avg/max
+            // ML 10-day chart — min/avg/max
             $('modelPill').textContent = d.model_used || 'LightGBM';
             const fc = d.forecast_ml || [];
             const ctx = $('mlChart').getContext('2d');
@@ -1894,8 +1896,8 @@
                 data: {
                     labels: fc.map(f => f.date),
                     datasets: [{
-                        label: 'Max (°C)',
-                        data: fc.map(f => f.temp_max_c),
+                        label: 'High (°F)',
+                        data: fc.map(f => f.temp_max_f),
                         borderColor: '#ef4444',
                         backgroundColor: 'rgba(239,68,68,.08)',
                         fill: false,
@@ -1904,8 +1906,8 @@
                         pointRadius: 3,
                         borderDash: [4, 3]
                     }, {
-                        label: 'Avg (°C)',
-                        data: fc.map(f => f.temp_c),
+                        label: 'Avg (°F)',
+                        data: fc.map(f => f.temp_f),
                         borderColor: '#818cf8',
                         backgroundColor: grad(ctx, 260, 'rgba(129,140,248,.28)', 'rgba(129,140,248,.02)'),
                         fill: true,
@@ -1914,8 +1916,8 @@
                         pointRadius: 5,
                         pointBackgroundColor: '#818cf8'
                     }, {
-                        label: 'Min (°C)',
-                        data: fc.map(f => f.temp_min_c),
+                        label: 'Low (°F)',
+                        data: fc.map(f => f.temp_min_f),
                         borderColor: '#38bdf8',
                         backgroundColor: 'rgba(56,189,248,.06)',
                         fill: false,
@@ -1934,7 +1936,7 @@
                         x: xCfg(),
                         y: yCfg({
                             ticks: {...yCfg().ticks,
-                                callback: v => v + '°C'
+                                callback: v => v + '°F'
                             }
                         })
                     }
@@ -1959,7 +1961,7 @@
             }).addTo(leafMap);
             const popup = `<div style="font-family:'Syne',sans-serif">
     <strong style="color:#38bdf8;font-size:.88rem">${city}, ${country}</strong><br>
-    <span style="color:#e2e8f0">🌡 ${cur.temp_c}°C / ${cur.temp_f}°F</span><br>
+    <span style="color:#e2e8f0">🌡 ${cur.temp_f}°F</span><br>
     <span style="color:#94a3b8">💧 ${cur.humidity}% · 💨 ${cur.wind_speed} mph ${cur.wind_dir}</span><br>
     <span style="color:#94a3b8">☁ ${cur.description}</span><br>
     <span style="color:#94a3b8">📍 ${lat.toFixed(4)}°, ${lon.toFixed(4)}°</span>
@@ -1995,12 +1997,12 @@
             $('analysisCity').textContent = city;
             const ts = d.temperature_stats;
             $('ssSummary').innerHTML = [
-                ['Mean Temp', `${ts.mean}°C`, 'window average'],
-                ['Std Dev', `±${ts.std}°C`, 'variability'],
-                ['Min', `${ts.min}°C`, 'window min'],
-                ['Max', `${ts.max}°C`, 'window max'],
-                ['Median', `${ts.p50}°C`, 'P50'],
-                ['IQR', `${(ts.p75-ts.p25).toFixed(2)}°C`, `P25=${ts.p25} P75=${ts.p75}`],
+                ['Mean Temp', `${+(ts.mean*9/5+32).toFixed(1)}°F`, 'window average'],
+                ['Std Dev', `±${+(ts.std*9/5).toFixed(2)}°F`, 'variability'],
+                ['Min', `${+(ts.min*9/5+32).toFixed(1)}°F`, 'window min'],
+                ['Max', `${+(ts.max*9/5+32).toFixed(1)}°F`, 'window max'],
+                ['Median', `${+(ts.p50*9/5+32).toFixed(1)}°F`, 'P50'],
+                ['IQR', `${+((ts.p75-ts.p25)*9/5).toFixed(2)}°F`, `P25=${+(ts.p25*9/5+32).toFixed(1)} P75=${+(ts.p75*9/5+32).toFixed(1)}`],
                 ['Skewness', `${ts.skewness}`, ts.skewness > 0 ? 'right-skewed' : 'left-skewed'],
             ].map(([l, v, s]) => `<div class="ss-box"><div class="ss-lbl">${l}</div><div class="ss-val">${v}</div><div class="ss-sub">${s}</div></div>`).join('');
 
@@ -2054,8 +2056,8 @@
                 data: {
                     labels: tr.labels,
                     datasets: [{
-                        label: 'Temperature (°C)',
-                        data: tr.temp_c,
+                        label: 'Temperature (°F)',
+                        data: tr.temp_c.map(v => +(v * 9 / 5 + 32).toFixed(1)),
                         borderColor: '#38bdf8',
                         backgroundColor: gB,
                         fill: true,
@@ -2063,8 +2065,8 @@
                         borderWidth: 2,
                         pointRadius: 2.5
                     }, {
-                        label: 'Heat Index (°C)',
-                        data: tr.heat_index,
+                        label: 'Heat Index (°F)',
+                        data: tr.heat_index.map(v => +(v * 9 / 5 + 32).toFixed(1)),
                         borderColor: '#fb923c',
                         backgroundColor: gO,
                         fill: true,
@@ -2083,7 +2085,7 @@
                         }),
                         y: yCfg({
                             ticks: {...yCfg().ticks,
-                                callback: v => v + '°C'
+                                callback: v => v + '°F'
                             }
                         })
                     }
@@ -2227,79 +2229,32 @@
                 }
             });
 
-            const fi = d.feature_importance;
-            if (fi.features && fi.features.length) {
-                mkChart('fiChart', {
-                    type: 'bar',
-                    data: {
-                        labels: fi.features,
-                        datasets: [{
-                            label: 'Importance',
-                            data: fi.values,
-                            backgroundColor: fi.values.map((_, i) => `hsla(${220+i*7},70%,62%,.72)`),
-                            borderRadius: 4,
-                            borderSkipped: false
-                        }]
-                    },
-                    options: {...CD,
-                        indexAxis: 'y',
-                        plugins: {...CD.plugins,
-                            legend: {
-                                display: false
-                            }
-                        },
-                        scales: {
-                            x: xCfg(),
-                            y: yCfg({
-                                ticks: {...yCfg().ticks,
-                                    font: {
-                                        size: 10
-                                    }
-                                }
-                            })
-                        }
-                    }
-                });
-            } else {
-                $('fiWrap').innerHTML = '<p style="color:var(--muted);font-size:.8rem;padding:.5rem">No model loaded.</p>'
-            }
-
-            const fc = d.forecast_ml || [],
-                std = d.forecast_band.std;
-            const upper = fc.map(f => +(f.temp_c + std).toFixed(1));
-            const lower = fc.map(f => +(f.temp_c - std).toFixed(1));
-            const ctx3 = $('bandChart').getContext('2d');
-            const gBand = grad(ctx3, 220, 'rgba(56,189,248,.18)', 'rgba(56,189,248,.03)');
-            mkChart('bandChart', {
+            // ── Pressure + Wind dual-axis trend (replaces LightGBM Feature Importance)
+            mkChart('pressWindChart', {
                 type: 'line',
                 data: {
-                    labels: fc.map(f => f.date),
+                    labels: tr.labels,
                     datasets: [{
-                        label: 'Upper (μ+σ)',
-                        data: upper,
-                        borderColor: 'rgba(56,189,248,.28)',
-                        backgroundColor: gBand,
-                        fill: '+1',
+                        label: 'Pressure (hPa)',
+                        data: tr.pressure,
+                        borderColor: '#a78bfa',
+                        backgroundColor: 'rgba(167,139,250,.12)',
+                        fill: true,
                         tension: .4,
-                        pointRadius: 0
+                        borderWidth: 2,
+                        pointRadius: 2,
+                        yAxisID: 'yP'
                     }, {
-                        label: `Mean (σ=±${std}°C)`,
-                        data: fc.map(f => f.temp_c),
-                        borderColor: '#38bdf8',
-                        backgroundColor: 'transparent',
+                        label: 'Wind (mph)',
+                        data: tr.wind_mph,
+                        borderColor: '#34d399',
+                        backgroundColor: 'rgba(52,211,153,.07)',
                         fill: false,
                         tension: .4,
-                        borderWidth: 2.5,
-                        pointRadius: 4,
-                        pointBackgroundColor: '#38bdf8'
-                    }, {
-                        label: 'Lower (μ-σ)',
-                        data: lower,
-                        borderColor: 'rgba(56,189,248,.28)',
-                        backgroundColor: 'transparent',
-                        fill: false,
-                        tension: .4,
-                        pointRadius: 0
+                        borderWidth: 1.5,
+                        borderDash: [5, 4],
+                        pointRadius: 2,
+                        yAxisID: 'yW'
                     }]
                 },
                 options: {...CD,
@@ -2308,12 +2263,108 @@
                         intersect: false
                     },
                     scales: {
-                        x: xCfg(),
-                        y: yCfg({
-                            ticks: {...yCfg().ticks,
-                                callback: v => v + '°C'
+                        x: xCfg({
+                            ticks: {...xCfg().ticks,
+                                maxTicksLimit: 8
                             }
-                        })
+                        }),
+                        yP: {...yCfg(),
+                            position: 'left',
+                            ticks: {...yCfg().ticks,
+                                color: '#a78bfa',
+                                callback: v => v + ' hPa'
+                            }
+                        },
+                        yW: {...yCfg(),
+                            position: 'right',
+                            grid: {
+                                display: false
+                            },
+                            ticks: {...yCfg().ticks,
+                                color: '#34d399',
+                                callback: v => v + ' mph'
+                            }
+                        }
+                    }
+                }
+            });
+
+            // ── Feels-Like vs Actual Temp — Comfort Gap (replaces Confidence Band)
+            const flActualF = tr.temp_c.map(v => +(v * 9 / 5 + 32).toFixed(1));
+            const flFeelsF = tr.temp_c.map((v, i) => {
+                const h = tr.humidity[i] || 50;
+                const hi_c = v > 27 ? (-8.78469 + 1.61139 * v + 2.33855 * h - 0.14612 * v * h - 0.012308 * v * v -
+                    0.016425 * h * h + 0.002212 * v * v * h + 0.000725 * v * h * h - 0.000004 * v * v * h * h) : v;
+                return +(hi_c * 9 / 5 + 32).toFixed(1);
+            });
+            const gapF = flActualF.map((v, i) => +(v - flFeelsF[i]).toFixed(1));
+            const ctxFG = $('feelsGapChart').getContext('2d');
+            const gAct = grad(ctxFG, 220, 'rgba(56,189,248,.25)', 'rgba(56,189,248,.02)');
+            const gFeel = grad(ctxFG, 220, 'rgba(251,146,60,.22)', 'rgba(251,146,60,.02)');
+            mkChart('feelsGapChart', {
+                type: 'line',
+                data: {
+                    labels: tr.labels,
+                    datasets: [{
+                        label: 'Actual (°F)',
+                        data: flActualF,
+                        borderColor: '#38bdf8',
+                        backgroundColor: gAct,
+                        fill: true,
+                        tension: .4,
+                        borderWidth: 2,
+                        pointRadius: 2.5,
+                        yAxisID: 'yT'
+                    }, {
+                        label: 'Feels Like (°F)',
+                        data: flFeelsF,
+                        borderColor: '#fb923c',
+                        backgroundColor: gFeel,
+                        fill: true,
+                        tension: .4,
+                        borderWidth: 2,
+                        borderDash: [5, 4],
+                        pointRadius: 2.5,
+                        yAxisID: 'yT'
+                    }, {
+                        label: 'Gap (°F)',
+                        data: gapF,
+                        borderColor: 'rgba(248,113,113,.8)',
+                        backgroundColor: 'transparent',
+                        fill: false,
+                        tension: .3,
+                        borderWidth: 1.5,
+                        pointRadius: 2,
+                        yAxisID: 'yG'
+                    }]
+                },
+                options: {...CD,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false
+                    },
+                    scales: {
+                        x: xCfg({
+                            ticks: {...xCfg().ticks,
+                                maxTicksLimit: 8
+                            }
+                        }),
+                        yT: {...yCfg(),
+                            position: 'left',
+                            ticks: {...yCfg().ticks,
+                                callback: v => v + '°F'
+                            }
+                        },
+                        yG: {...yCfg(),
+                            position: 'right',
+                            grid: {
+                                display: false
+                            },
+                            ticks: {...yCfg().ticks,
+                                color: 'rgba(248,113,113,.8)',
+                                callback: v => v + '°F gap'
+                            }
+                        }
                     }
                 }
             });
@@ -2321,7 +2372,7 @@
 
         // ══ Render: Forecast Report ════════════════════════════════════════════════
         function renderForecast(d) {
-            $('fcCity').textContent = `${d.city} · ${d.generated_at}`;
+            $('fcCity').textContent = d.city;
             const ts = d.temperature_stats,
                 tr = d.trend,
                 fc = d.forecast_ml || [],
@@ -2373,8 +2424,8 @@
                 data: {
                     labels: conts.map(c => c.continent),
                     datasets: [{
-                        label: 'Mean Temp (°C)',
-                        data: conts.map(c => c.mean_temp_c),
+                        label: 'Mean Temp (°F)',
+                        data: conts.map(c => +(c.mean_temp_c * 9 / 5 + 32).toFixed(1)),
                         backgroundColor: conts.map(c => c.mean_temp_c > 25 ? 'rgba(239,68,68,.7)' : c.mean_temp_c > 15 ? 'rgba(251,146,60,.65)' : 'rgba(56,189,248,.65)'),
                         borderRadius: 5
                     }]
@@ -2389,7 +2440,7 @@
                         x: xCfg(),
                         y: yCfg({
                             ticks: {...yCfg().ticks,
-                                callback: v => v + '°C'
+                                callback: v => v + '°F'
                             }
                         })
                     }
@@ -2397,7 +2448,7 @@
             });
             $('fc_overview_stats').innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:.5rem">
     ${[['Records','144,627'],['Countries','211'],['Cities','257'],['Date Range','May 2024–May 2026'],
-       ['Mean Global Temp','~18°C'],['Season',d.season],['Climate Zone',d.lat_zone],
+       ['Mean Global Temp','~64°F'],['Season',d.season],['Climate Zone',d.lat_zone],
        ['Best Model',names.reduce((b,n)=>mm[n].RMSE<mm[b].RMSE?n:b,names[0])]
     ].map(([l,v])=>`<div class="ss-box"><div class="ss-lbl">${l}</div><div class="ss-val" style="font-size:.95rem">${v}</div></div>`).join('')}
   </div>`;
@@ -2406,13 +2457,13 @@
   const ctx_ts=$('fc_tempSeries').getContext('2d');
   const gTSeries=grad(ctx_ts,300,'rgba(56,189,248,.3)','rgba(56,189,248,.02)');
   mkChart('fc_tempSeries',{type:'line',data:{labels:[...tr.labels,...fc.map(f=>f.date)],datasets:[
-    {label:'Historical (°C)',data:[...tr.temp_c,...Array(fc.length).fill(null)],borderColor:'#38bdf8',backgroundColor:gTSeries,fill:true,tension:.4,borderWidth:2,pointRadius:2},
-    {label:'Forecast (°C)',data:[...Array(tr.labels.length).fill(null),...fc.map(f=>f.temp_c)],borderColor:'#818cf8',backgroundColor:'rgba(129,140,248,.15)',fill:true,tension:.4,borderWidth:2,borderDash:[6,3],pointRadius:3},
-  ]},options:{...CD,interaction:{mode:'index',intersect:false},scales:{x:xCfg({ticks:{...xCfg().ticks,maxTicksLimit:10}}),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°C'}})}}});
+    {label:'Historical (°F)',data:[...tr.temp_c.map(v=>+(v*9/5+32).toFixed(1)),...Array(fc.length).fill(null)],borderColor:'#38bdf8',backgroundColor:gTSeries,fill:true,tension:.4,borderWidth:2,pointRadius:2},
+    {label:'Forecast (°F)',data:[...Array(tr.labels.length).fill(null),...fc.map(f=>f.temp_f)],borderColor:'#818cf8',backgroundColor:'rgba(129,140,248,.15)',fill:true,tension:.4,borderWidth:2,borderDash:[6,3],pointRadius:3},
+  ]},options:{...CD,interaction:{mode:'index',intersect:false},scales:{x:xCfg({ticks:{...xCfg().ticks,maxTicksLimit:10}}),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°F'}})}}});
 
   const seasonNames=Object.keys(seas);
-  mkChart('fc_seasonal',{type:'bar',data:{labels:seasonNames,datasets:[{label:'Avg Temp (°C)',data:seasonNames.map(s=>seas[s].temp_c),backgroundColor:['rgba(56,189,248,.65)','rgba(239,68,68,.65)','rgba(251,146,60,.65)','rgba(129,140,248,.65)'],borderRadius:6}]},options:{...CD,plugins:{...CD.plugins,legend:{display:false}},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°C'}})}}});
-  mkChart('fc_tempBox',{type:'bar',data:{labels:['Min','P25','Median','P75','Max'],datasets:[{label:'°C',data:[ts.min,ts.p25,ts.p50,ts.p75,ts.max],backgroundColor:['rgba(56,189,248,.6)','rgba(52,211,153,.6)','rgba(129,140,248,.7)','rgba(251,146,60,.6)','rgba(239,68,68,.65)'],borderRadius:5}]},options:{...CD,plugins:{...CD.plugins,legend:{display:false}},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°C'}})}}});
+  mkChart('fc_seasonal',{type:'bar',data:{labels:seasonNames,datasets:[{label:'Avg Temp (°F)',data:seasonNames.map(s=>+(seas[s].temp_c*9/5+32).toFixed(1)),backgroundColor:['rgba(56,189,248,.65)','rgba(239,68,68,.65)','rgba(251,146,60,.65)','rgba(129,140,248,.65)'],borderRadius:6}]},options:{...CD,plugins:{...CD.plugins,legend:{display:false}},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°F'}})}}});
+  mkChart('fc_tempBox',{type:'bar',data:{labels:['Min','P25','Median','P75','Max'],datasets:[{label:'°F',data:[ts.min,ts.p25,ts.p50,ts.p75,ts.max].map(v=>+(v*9/5+32).toFixed(1)),backgroundColor:['rgba(56,189,248,.6)','rgba(52,211,153,.6)','rgba(129,140,248,.7)','rgba(251,146,60,.6)','rgba(239,68,68,.65)'],borderRadius:5}]},options:{...CD,plugins:{...CD.plugins,legend:{display:false}},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°F'}})}}});
 
   // ── Humidity tab ──
   const ctx_hs=$('fc_humSeries').getContext('2d');
@@ -2444,21 +2495,21 @@
 
   // ── Models comparison ──
   const mColors=['rgba(56,189,248,.7)','rgba(129,140,248,.7)','rgba(52,211,153,.7)','rgba(251,146,60,.7)','rgba(248,113,113,.65)','rgba(168,85,247,.65)'];
-  mkChart('fc_modelMAE',{type:'bar',data:{labels:names,datasets:[{label:'MAE (°C)',data:names.map(n=>mm[n].MAE),backgroundColor:mColors,borderRadius:5}]},options:{...CD,plugins:{...CD.plugins,legend:{display:false}},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°C'}})}}});
-  mkChart('fc_modelRMSE',{type:'bar',data:{labels:names,datasets:[{label:'RMSE (°C)',data:names.map(n=>mm[n].RMSE),backgroundColor:mColors,borderRadius:5}]},options:{...CD,plugins:{...CD.plugins,legend:{display:false}},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°C'}})}}});
+  mkChart('fc_modelMAE',{type:'bar',data:{labels:names,datasets:[{label:'MAE (°F)',data:names.map(n=>mm[n].MAE),backgroundColor:mColors,borderRadius:5}]},options:{...CD,plugins:{...CD.plugins,legend:{display:false}},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°F'}})}}});
+  mkChart('fc_modelRMSE',{type:'bar',data:{labels:names,datasets:[{label:'RMSE (°F)',data:names.map(n=>mm[n].RMSE),backgroundColor:mColors,borderRadius:5}]},options:{...CD,plugins:{...CD.plugins,legend:{display:false}},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°F'}})}}});
   mkChart('fc_modelR2',{type:'bar',data:{labels:names,datasets:[{label:'R² Score',data:names.map(n=>mm[n].R2),backgroundColor:names.map(n=>mm[n].R2>0.93?'rgba(52,211,153,.7)':mm[n].R2>0.9?'rgba(56,189,248,.65)':'rgba(248,113,113,.6)'),borderRadius:5}]},options:{...CD,indexAxis:'y',plugins:{...CD.plugins,legend:{display:false}},scales:{x:{...xCfg(),min:.8,max:1},y:yCfg()}}});
   mkChart('fc_modelMAPE',{type:'bar',data:{labels:names,datasets:[{label:'MAPE %',data:names.map(n=>mm[n].MAPE),backgroundColor:mColors,borderRadius:5}]},options:{...CD,plugins:{...CD.plugins,legend:{display:false}},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'%'}})}}});
 
   // ── Ensemble tab ──
-  const upper2=fc.map(f=>+(f.temp_max_c).toFixed(1));
-  const lower2=fc.map(f=>+(f.temp_min_c).toFixed(1));
+  const upper2=fc.map(f=>f.temp_max_f);
+  const lower2=fc.map(f=>f.temp_min_f);
   const ctx_ens=$('fc_ensemble').getContext('2d');
   const gEns=grad(ctx_ens,300,'rgba(52,211,153,.25)','rgba(52,211,153,.03)');
   mkChart('fc_ensemble',{type:'line',data:{labels:fc.map(f=>f.date),datasets:[
-    {label:'Max (°C)',data:upper2,borderColor:'rgba(239,68,68,.6)',fill:false,tension:.4,borderWidth:1.5,pointRadius:3,borderDash:[4,3]},
-    {label:'Ensemble Avg (°C)',data:fc.map(f=>f.temp_c),borderColor:'#34d399',backgroundColor:gEns,fill:true,tension:.4,borderWidth:2.5,pointRadius:5,pointBackgroundColor:'#34d399'},
-    {label:'Min (°C)',data:lower2,borderColor:'rgba(56,189,248,.6)',fill:false,tension:.4,borderWidth:1.5,pointRadius:3,borderDash:[4,3]},
-  ]},options:{...CD,interaction:{mode:'index',intersect:false},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°C'}})}}});
+    {label:'High (°F)',data:upper2,borderColor:'rgba(239,68,68,.6)',fill:false,tension:.4,borderWidth:1.5,pointRadius:3,borderDash:[4,3]},
+    {label:'Ensemble Avg (°F)',data:fc.map(f=>f.temp_f),borderColor:'#34d399',backgroundColor:gEns,fill:true,tension:.4,borderWidth:2.5,pointRadius:5,pointBackgroundColor:'#34d399'},
+    {label:'Low (°F)',data:lower2,borderColor:'rgba(56,189,248,.6)',fill:false,tension:.4,borderWidth:1.5,pointRadius:3,borderDash:[4,3]},
+  ]},options:{...CD,interaction:{mode:'index',intersect:false},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°F'}})}}});
 
   const std2=std*2;
   const upper2sig=fc.map(f=>+(f.temp_c+std2).toFixed(1));
@@ -2467,27 +2518,27 @@
   const gB2=grad(ctx_b2,220,'rgba(56,189,248,.15)','rgba(56,189,248,.02)');
   mkChart('fc_band2',{type:'line',data:{labels:fc.map(f=>f.date),datasets:[
     {label:'μ+2σ',data:upper2sig,borderColor:'rgba(248,113,113,.3)',fill:'+1',backgroundColor:'rgba(248,113,113,.06)',tension:.4,pointRadius:0},
-    {label:'μ+σ',data:fc.map(f=>+(f.temp_c+std).toFixed(1)),borderColor:'rgba(56,189,248,.3)',fill:'+1',backgroundColor:gB2,tension:.4,pointRadius:0},
-    {label:'Mean',data:fc.map(f=>f.temp_c),borderColor:'#38bdf8',fill:false,tension:.4,borderWidth:2.5,pointRadius:4,pointBackgroundColor:'#38bdf8'},
-    {label:'μ-σ',data:fc.map(f=>+(f.temp_c-std).toFixed(1)),borderColor:'rgba(56,189,248,.3)',fill:false,tension:.4,pointRadius:0},
+    {label:'μ+σ',data:fc.map(f=>+(f.temp_f+std*9/5).toFixed(1)),borderColor:'rgba(56,189,248,.3)',fill:'+1',backgroundColor:gB2,tension:.4,pointRadius:0},
+    {label:'Mean (°F)',data:fc.map(f=>f.temp_f),borderColor:'#38bdf8',fill:false,tension:.4,borderWidth:2.5,pointRadius:4,pointBackgroundColor:'#38bdf8'},
+    {label:'μ-σ',data:fc.map(f=>+(f.temp_f-std*9/5).toFixed(1)),borderColor:'rgba(56,189,248,.3)',fill:false,tension:.4,pointRadius:0},
     {label:'μ-2σ',data:lower2sig,borderColor:'rgba(248,113,113,.3)',fill:false,tension:.4,pointRadius:0},
-  ]},options:{...CD,interaction:{mode:'index',intersect:false},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°C'}})}}});
+  ]},options:{...CD,interaction:{mode:'index',intersect:false},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°F'}})}}});
 
   // ── Climate tab ──
   const seasonLabels=Object.keys(seas);
   mkChart('fc_climate',{type:'line',data:{labels:seasonLabels,datasets:[
-    {label:'Avg Temp (°C)',data:seasonLabels.map(s=>seas[s].temp_c),borderColor:'#f97316',backgroundColor:'rgba(249,115,22,.15)',fill:true,tension:.3,borderWidth:2.5,pointRadius:6,pointBackgroundColor:'#f97316',yAxisID:'y1'},
+    {label:'Avg Temp (°F)',data:seasonLabels.map(s=>+(seas[s].temp_c*9/5+32).toFixed(1)),borderColor:'#f97316',backgroundColor:'rgba(249,115,22,.15)',fill:true,tension:.3,borderWidth:2.5,pointRadius:6,pointBackgroundColor:'#f97316',yAxisID:'y1'},
     {label:'Humidity (%)',data:seasonLabels.map(s=>seas[s].humidity_pct),borderColor:'#818cf8',backgroundColor:'rgba(129,140,248,.1)',fill:true,tension:.3,borderWidth:2,pointRadius:5,borderDash:[5,3],yAxisID:'y2'},
     {label:'Wind (mph)',data:seasonLabels.map(s=>seas[s].wind_mph),borderColor:'#34d399',fill:false,tension:.3,borderWidth:2,pointRadius:5,yAxisID:'y1'},
   ]},options:{...CD,interaction:{mode:'index',intersect:false},scales:{x:xCfg(),y1:{...yCfg(),position:'left',ticks:{...yCfg().ticks,color:'#f97316',callback:v=>v+'°'}},y2:{...yCfg(),position:'right',grid:{display:false},ticks:{...yCfg().ticks,color:'#818cf8',callback:v=>v+'%'}}}}});
 
   mkChart('fc_radar',{type:'radar',data:{labels:seasonLabels,datasets:[
-    {label:'Temp (°C)',data:seasonLabels.map(s=>seas[s].temp_c),borderColor:'#f97316',backgroundColor:'rgba(249,115,22,.15)',pointBackgroundColor:'#f97316'},
+    {label:'Temp (°C)',data:seasonLabels.map(s=>+(seas[s].temp_c*9/5+32).toFixed(1)),borderColor:'#f97316',backgroundColor:'rgba(249,115,22,.15)',pointBackgroundColor:'#f97316'},
     {label:'Humidity %',data:seasonLabels.map(s=>seas[s].humidity_pct),borderColor:'#818cf8',backgroundColor:'rgba(129,140,248,.12)',pointBackgroundColor:'#818cf8'},
     {label:'Wind mph',data:seasonLabels.map(s=>seas[s].wind_mph*5),borderColor:'#34d399',backgroundColor:'rgba(52,211,153,.1)',pointBackgroundColor:'#34d399'},
   ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#64748b',font:{size:11}}}},scales:{r:{ticks:{color:'#475569',backdropColor:'transparent'},grid:{color:'rgba(27,38,64,.7)'},pointLabels:{color:'#94a3b8'}}}}});
 
-  mkChart('fc_contBubble',{type:'bubble',data:{datasets:conts.map((c,i)=>({label:c.continent,data:[{x:c.mean_temp_c,y:c.humidity_pct,r:12}],backgroundColor:`hsla(${i*60},65%,55%,.65)`}))},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#64748b',font:{size:10},boxWidth:10}},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.raw.x}°C, ${ctx.raw.y}% humidity`}}},scales:{x:{...xCfg(),title:{display:true,text:'Mean Temp (°C)',color:'#475569'}},y:{...yCfg(),title:{display:true,text:'Humidity %',color:'#475569'}}}}});
+  mkChart('fc_contBubble',{type:'bubble',data:{datasets:conts.map((c,i)=>({label:c.continent,data:[{x:+(c.mean_temp_c*9/5+32).toFixed(1),y:c.humidity_pct,r:12}],backgroundColor:`hsla(${i*60},65%,55%,.65)`}))},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#64748b',font:{size:10},boxWidth:10}},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${ctx.raw.x}°C, ${ctx.raw.y}% humidity`}}},scales:{x:{...xCfg(),title:{display:true,text:'Mean Temp (°F)',color:'#475569'}},y:{...yCfg(),title:{display:true,text:'Humidity %',color:'#475569'}}}}});
 
   // ── Geo Map tab (lazy init) ──
   const wc=d.world_cities||[];
@@ -2502,7 +2553,7 @@
     {label:'Iceland (Cold)',v:3.1,col:'rgba(56,189,248,.75)'},
     {label:'Mongolia',v:3.4,col:'rgba(56,189,248,.65)'},
   ];
-  mkChart('fc_hotCold',{type:'bar',data:{labels:hotCold.map(x=>x.label),datasets:[{label:'Avg Temp (°C)',data:hotCold.map(x=>x.v),backgroundColor:hotCold.map(x=>x.col),borderRadius:5}]},options:{...CD,plugins:{...CD.plugins,legend:{display:false}},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°C'}})}}});
+  mkChart('fc_hotCold',{type:'bar',data:{labels:hotCold.map(x=>x.label),datasets:[{label:'Avg Temp (°F)',data:hotCold.map(x=>+(x.v*9/5+32).toFixed(1)),backgroundColor:hotCold.map(x=>x.col),borderRadius:5}]},options:{...CD,plugins:{...CD.plugins,legend:{display:false}},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'°F'}})}}});
   mkChart('fc_humHeat',{type:'bar',data:{labels:conts.map(c=>c.continent),datasets:[{label:'Humidity %',data:conts.map(c=>c.humidity_pct),backgroundColor:conts.map(c=>c.humidity_pct>70?'rgba(129,140,248,.75)':c.humidity_pct>60?'rgba(56,189,248,.65)':'rgba(52,211,153,.6)'),borderRadius:5}]},options:{...CD,plugins:{...CD.plugins,legend:{display:false}},scales:{x:xCfg(),y:yCfg({ticks:{...yCfg().ticks,callback:v=>v+'%'}})}}});
 
   // ── Feature Importance tab ──
@@ -2539,7 +2590,7 @@ function initForecastMap(){
     const col=c.temp_c>28?'#ef4444':c.temp_c>20?'#eab308':c.temp_c>10?'#22c55e':'#3b82f6';
     const circle=L.circleMarker([c.lat,c.lon],{radius:8,fillColor:col,color:'rgba(255,255,255,.4)',weight:1,opacity:1,fillOpacity:.8}).addTo(fcMap);
     circle.bindPopup(`<div style="font-family:'Syne',sans-serif"><strong style="color:${col}">${c.city}</strong><br>
-      <span style="color:#e2e8f0">🌡 ${c.temp_c}°C</span><br><span style="color:#94a3b8">💧 ${c.humidity}%</span><br>
+      <span style="color:#e2e8f0">🌡 ${+(c.temp_c*9/5+32).toFixed(1)}°F <span style="font-size:.8em;opacity:.55">/ ${c.temp_c}°C</span></span><br><span style="color:#94a3b8">💧 ${c.humidity}%</span><br>
       <span style="color:#94a3b8">📍 ${c.lat.toFixed(2)}°, ${c.lon.toFixed(2)}°</span></div>`);
   });
   // Current city marker
