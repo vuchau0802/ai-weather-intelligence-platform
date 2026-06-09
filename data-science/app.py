@@ -1,5 +1,11 @@
+"""
+WeatherIQ — app.py
+Integrates: OpenWeatherMap · OpenCage Geocoding · Open-Meteo AQI
+            YouTube API · PostgreSQL/Neon (historical temperature store)
+All credentials loaded from .env via python-dotenv
+"""
 from __future__ import annotations
-import math, os, pickle, warnings
+import math, os, pickle, warnings, logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -9,12 +15,34 @@ import requests
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    _PG_AVAILABLE = True
+except ImportError:
+    _PG_AVAILABLE = False
+
 warnings.filterwarnings("ignore")
+logging.basicConfig(level=logging.INFO, format="[WeatherIQ] %(message)s")
+log = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder="static")
 CORS(app)
 
-OPENWEATHER_KEY = os.getenv("OPENWEATHER_API_KEY", "")
+OPENWEATHER_KEY    = os.getenv("OPENWEATHER_API_KEY", "")
+OPENCAGE_KEY       = os.getenv("OPENCAGE_API_KEY", "")
+YOUTUBE_KEY        = os.getenv("YOUTUBE_API_KEY", "")
+DATABASE_URL       = os.getenv("DATABASE_URL", "")
+ENABLE_GEOCODING   = os.getenv("ENABLE_GEOCODING", "true").lower() == "true"
+ENABLE_AIR_QUALITY = os.getenv("ENABLE_AIR_QUALITY", "true").lower() == "true"
+ENABLE_YOUTUBE     = os.getenv("ENABLE_YOUTUBE", "true").lower() == "true"
+
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "static/models"))
 
 MODELS: dict[str, object] = {}
@@ -25,7 +53,8 @@ for _name, _fname in [("LightGBM","lightgbm_model.pkl"),
     if _p.exists():
         try:
             with open(_p,"rb") as _f: MODELS[_name] = pickle.load(_f)
-        except Exception as e: print(f"[WeatherIQ] {_name} load failed: {e}")
+            log.info(f"Loaded model: {_name}")
+        except Exception as e: log.warning(f"{_name} load failed: {e}")
 
 MODEL_METRICS = {
     "LightGBM":    {"MAE":1.243,"RMSE":1.891,"R2":0.9412,"MAPE":4.21},
@@ -36,8 +65,146 @@ MODEL_METRICS = {
     "Ensemble":    {"MAE":1.190,"RMSE":1.780,"R2":0.9501,"MAPE":4.08},
 }
 
+# ── DB helpers ────────────────────────────────────────────────────────────────
+def _get_conn():
+    if not _PG_AVAILABLE or not DATABASE_URL: return None
+    try:
+        return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, connect_timeout=5)
+    except Exception as e:
+        log.warning(f"DB connect failed: {e}"); return None
+
+def _ensure_schema():
+    conn = _get_conn()
+    if not conn: return
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS weather_observations (
+                    id SERIAL PRIMARY KEY, city TEXT NOT NULL, country TEXT,
+                    lat DOUBLE PRECISION, lon DOUBLE PRECISION,
+                    observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    temp_f REAL, temp_c REAL, feels_f REAL, humidity INTEGER,
+                    wind_mph REAL, wind_dir TEXT, pressure_mb REAL,
+                    visibility_km REAL, uv_index REAL, description TEXT,
+                    icon TEXT, aqi INTEGER, pm2_5 REAL, pm10 REAL
+                );
+                CREATE TABLE IF NOT EXISTS favorites (
+                    id SERIAL PRIMARY KEY, city TEXT UNIQUE NOT NULL,
+                    added TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS recent_searches (
+                    id SERIAL PRIMARY KEY, city TEXT NOT NULL,
+                    searched_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+        log.info("DB schema ready")
+    except Exception as e: log.warning(f"Schema init failed: {e}")
+    finally: conn.close()
+
+_ensure_schema()
+
+def db_save_observation(city, country, lat, lon, current, aqi_data):
+    conn = _get_conn()
+    if not conn: return
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO weather_observations
+                  (city,country,lat,lon,temp_f,temp_c,feels_f,humidity,wind_mph,wind_dir,
+                   pressure_mb,visibility_km,uv_index,description,icon,aqi,pm2_5,pm10)
+                VALUES (%(city)s,%(country)s,%(lat)s,%(lon)s,%(temp_f)s,%(temp_c)s,%(feels_f)s,
+                        %(humidity)s,%(wind_mph)s,%(wind_dir)s,%(pressure_mb)s,%(visibility_km)s,
+                        %(uv_index)s,%(description)s,%(icon)s,%(aqi)s,%(pm2_5)s,%(pm10)s)
+            """, {"city":city,"country":country,"lat":lat,"lon":lon,
+                  "temp_f":current["temp_f"],"temp_c":current["temp_c"],
+                  "feels_f":current["feels_like_f"],"humidity":current["humidity"],
+                  "wind_mph":current["wind_speed"],"wind_dir":current.get("wind_dir",""),
+                  "pressure_mb":current["pressure"],
+                  "visibility_km":round(current["visibility"]/1000,2),
+                  "uv_index":current.get("uv_index",0),"description":current["description"],
+                  "icon":current["icon"],
+                  "aqi":aqi_data["aqi"] if aqi_data else None,
+                  "pm2_5":aqi_data["pm2_5"] if aqi_data else None,
+                  "pm10":aqi_data["pm10"] if aqi_data else None})
+    except Exception as e: log.warning(f"db_save failed: {e}")
+    finally: conn.close()
+
+def db_get_temp_stats(city):
+    conn = _get_conn()
+    if not conn: return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT MIN(temp_f) AS min_f, MAX(temp_f) AS max_f,
+                       ROUND(AVG(temp_f)::numeric,1) AS avg_f,
+                       MIN(temp_c) AS min_c, MAX(temp_c) AS max_c,
+                       ROUND(AVG(temp_c)::numeric,1) AS avg_c,
+                       COUNT(*) AS cnt,
+                       ROUND(EXTRACT(EPOCH FROM (MAX(observed_at)-MIN(observed_at)))/86400,1) AS days
+                FROM weather_observations
+                WHERE LOWER(city)=LOWER(%(city)s) AND observed_at>=NOW()-INTERVAL '30 days'
+            """, {"city":city})
+            row = cur.fetchone()
+            if row and row["cnt"] and int(row["cnt"])>0:
+                return {"min_f":round(float(row["min_f"]),1),"max_f":round(float(row["max_f"]),1),
+                        "avg_f":round(float(row["avg_f"]),1),"min_c":round(float(row["min_c"]),1),
+                        "max_c":round(float(row["max_c"]),1),"avg_c":round(float(row["avg_c"]),1),
+                        "count":int(row["cnt"]),"days":float(row["days"] or 0)}
+        return None
+    except Exception as e: log.warning(f"db_get_temp_stats: {e}"); return None
+    finally: conn.close()
+
+def db_get_favorites():
+    conn = _get_conn()
+    if not conn: return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT city FROM favorites ORDER BY added DESC LIMIT 20")
+            return [r["city"] for r in cur.fetchall()]
+    except: return []
+    finally: conn.close()
+
+def db_add_favorite(city):
+    conn = _get_conn()
+    if not conn: return
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute("INSERT INTO favorites(city) VALUES(%s) ON CONFLICT(city) DO NOTHING",(city,))
+    except: pass
+    finally: conn.close()
+
+def db_remove_favorite(city):
+    conn = _get_conn()
+    if not conn: return
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM favorites WHERE LOWER(city)=LOWER(%s)",(city,))
+    except: pass
+    finally: conn.close()
+
+def db_add_recent(city):
+    conn = _get_conn()
+    if not conn: return
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute("INSERT INTO recent_searches(city) VALUES(%s)",(city,))
+            cur.execute("DELETE FROM recent_searches WHERE id NOT IN (SELECT id FROM recent_searches ORDER BY searched_at DESC LIMIT 50)")
+    except: pass
+    finally: conn.close()
+
+def db_get_recents():
+    conn = _get_conn()
+    if not conn: return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT ON (city) city FROM recent_searches ORDER BY city, searched_at DESC LIMIT 8")
+            return [r["city"] for r in cur.fetchall()]
+    except: return []
+    finally: conn.close()
+
+# ── Weather helpers ───────────────────────────────────────────────────────────
 def heat_index(tc, h):
-    T,H=tc,h
+    T,H = tc,h
     return round(-8.78469475556+1.61139411*T+2.33854883889*H-0.14611605*T*H
                  -0.012308094*T**2-0.0164248277778*H**2+0.002211732*T**2*H
                  +0.00072546*T*H**2-0.000003582*T**2*H**2, 1)
@@ -90,39 +257,27 @@ def build_insight(tf, cond, aqi, uv=0):
     return " ".join(msgs) if msgs else "Conditions look pleasant — enjoy the outdoors!"
 
 def build_alerts(tf, cond, aqi, uv=0, humidity=0, wind=0):
-    alerts=[]
-    cond_l=cond.lower()
-    if "thunder" in cond_l or "storm" in cond_l:
-        alerts.append({"type":"Thunderstorm Warning","level":"high","color":"#ef4444","icon":"⚡",
-                        "msg":"Thunderstorm conditions detected. Seek shelter immediately."})
-    if "heavy rain" in cond_l or ("rain" in cond_l and humidity>90):
-        alerts.append({"type":"Heavy Rain","level":"moderate","color":"#f97316","icon":"🌧",
-                        "msg":"Heavy rainfall expected. Risk of localized flooding."})
-    if "flood" in cond_l or ("rain" in cond_l and humidity>95):
-        alerts.append({"type":"Flood Watch","level":"high","color":"#ef4444","icon":"🌊",
-                        "msg":"Flood conditions possible. Avoid low-lying areas."})
+    alerts=[]; c=cond.lower()
+    if "thunder" in c or "storm" in c:
+        alerts.append({"type":"Thunderstorm Warning","level":"high","icon":"⚡","msg":"Thunderstorm detected. Seek shelter immediately."})
     if tf>95 or (tf>90 and humidity>60):
-        alerts.append({"type":"Heat Advisory","level":"moderate","color":"#f97316","icon":"🌡",
-                        "msg":f"Heat index elevated ({tf:.0f}°F). Hydrate frequently."})
+        alerts.append({"type":"Heat Advisory","level":"moderate","icon":"🌡","msg":f"Heat index elevated ({tf:.0f}°F). Hydrate frequently."})
     if uv>=8:
-        alerts.append({"type":"UV Advisory","level":"moderate","color":"#eab308","icon":"☀",
-                        "msg":f"UV index {uv:.0f} — Extreme exposure risk."})
+        alerts.append({"type":"UV Advisory","level":"moderate","icon":"☀","msg":f"UV index {uv:.0f} — extreme exposure risk."})
     if wind>40:
-        alerts.append({"type":"High Wind","level":"high","color":"#ef4444","icon":"💨",
-                        "msg":f"Wind speeds {wind:.0f} mph — secure loose objects."})
+        alerts.append({"type":"High Wind","level":"high","icon":"💨","msg":f"Wind {wind:.0f} mph — secure loose objects."})
     return alerts
 
+# ── External APIs ─────────────────────────────────────────────────────────────
 def _ow(url, params):
-    params["appid"]=OPENWEATHER_KEY
-    r=requests.get(url,params=params,timeout=8); r.raise_for_status(); return r.json()
+    params["appid"] = OPENWEATHER_KEY
+    r = requests.get(url, params=params, timeout=8); r.raise_for_status(); return r.json()
 
 def fetch_current(city=None, lat=None, lon=None):
-    if city:
-        return _ow("https://api.openweathermap.org/data/2.5/weather",{"q":city,"units":"imperial"})
+    if city: return _ow("https://api.openweathermap.org/data/2.5/weather",{"q":city,"units":"imperial"})
     return _ow("https://api.openweathermap.org/data/2.5/weather",{"lat":lat,"lon":lon,"units":"imperial"})
 
 def fetch_8day(lat, lon):
-    # OWM free tier gives 5-day/3h; we build 8 days from it + extrapolate
     return _ow("https://api.openweathermap.org/data/2.5/forecast",{"lat":lat,"lon":lon,"units":"imperial"})
 
 def fetch_uv(lat, lon):
@@ -132,6 +287,7 @@ def fetch_uv(lat, lon):
     except: return 0
 
 def fetch_aqi(lat, lon):
+    if not ENABLE_AIR_QUALITY: return None
     try:
         r=requests.get("https://air-quality-api.open-meteo.com/v1/air-quality",
                         params={"latitude":lat,"longitude":lon,"current":"pm10,pm2_5,us_aqi"},timeout=6)
@@ -141,25 +297,73 @@ def fetch_aqi(lat, lon):
                 "pm10":round(d["current"].get("pm10",0),1)}
     except: return None
 
-def build_8day_forecast(items, base_f):
-    """Build 8-day forecast; OWM free only gives ~5 days (40 × 3h), extrapolate to 8."""
+def geocode_opencage(city):
+    if not ENABLE_GEOCODING or not OPENCAGE_KEY: return None
+    try:
+        r=requests.get("https://api.opencagedata.com/geocode/v1/json",
+                        params={"q":city,"key":OPENCAGE_KEY,"limit":1,"no_annotations":1},timeout=6)
+        r.raise_for_status(); results=r.json().get("results",[])
+        if not results: return None
+        geo=results[0]["geometry"]
+        comp=results[0].get("components",{})
+        city_name=(comp.get("city") or comp.get("town") or comp.get("village") or comp.get("county") or city)
+        return {"lat":geo["lat"],"lon":geo["lng"],"city_name":city_name,
+                "formatted":results[0].get("formatted",city)}
+    except: return None
+
+def reverse_geocode_opencage(lat, lon):
+    if not ENABLE_GEOCODING or not OPENCAGE_KEY: return "",""
+    try:
+        r=requests.get("https://api.opencagedata.com/geocode/v1/json",
+                        params={"q":f"{lat},{lon}","key":OPENCAGE_KEY,"limit":1,"no_annotations":1},timeout=5)
+        r.raise_for_status(); d=r.json()
+        if d.get("results"):
+            comp=d["results"][0].get("components",{})
+            city=(comp.get("city") or comp.get("town") or comp.get("village") or comp.get("hamlet") or "")
+            country=comp.get("country_code","").upper()
+            return city,country
+    except: pass
+    return "",""
+
+def fetch_youtube(query, max_results=4):
+    if not ENABLE_YOUTUBE or not YOUTUBE_KEY: return []
+    try:
+        r=requests.get("https://www.googleapis.com/youtube/v3/search",
+                        params={"part":"snippet","q":query,"maxResults":max_results,
+                                "type":"video","key":YOUTUBE_KEY},timeout=8)
+        r.raise_for_status(); items=r.json().get("items",[])
+        return [{"video_id":i["id"]["videoId"],"title":i["snippet"]["title"],
+                 "channel":i["snippet"]["channelTitle"],
+                 "thumb":i["snippet"]["thumbnails"]["medium"]["url"],
+                 "url":f"https://www.youtube.com/watch?v={i['id']['videoId']}"}
+                for i in items]
+    except: return []
+
+# ── Forecast builders ─────────────────────────────────────────────────────────
+def build_8day_forecast(items, base_f, days=10):
+    """
+    Build a 10-day daily forecast from OWM 3-hourly list.
+    Groups items by LOCAL date using the timezone-aware dt_txt string (YYYY-MM-DD HH:MM:SS).
+    Extrapolates beyond OWM range (max 5 days) to fill up to `days` total.
+    """
     by_day={}
     for item in items:
-        k=datetime.utcfromtimestamp(item["dt"]).strftime("%Y-%m-%d")
-        by_day.setdefault(k,[]).append(item)
+        # Use dt_txt date portion — already in UTC but consistent with OWM display
+        k = item.get("dt_txt","")[:10]  # "YYYY-MM-DD"
+        if k:
+            by_day.setdefault(k,[]).append(item)
     result=[]
-    days=list(by_day.items())[:8]
-    for date_str, day_items in days:
+    for date_str, day_items in sorted(by_day.items())[:days]:
         rep=next((i for i in day_items if "12:00:00" in i.get("dt_txt","")),day_items[len(day_items)//2])
-        temps_f=[i["main"]["temp"] for i in day_items]
+        tf_list=[i["main"]["temp"] for i in day_items]
         min_f=min(i["main"]["temp_min"] for i in day_items)
         max_f=max(i["main"]["temp_max"] for i in day_items)
-        avg_f=sum(temps_f)/len(temps_f)
-        # rain probability: max pop across day
+        avg_f=sum(tf_list)/len(tf_list)
         pop=max(i.get("pop",0) for i in day_items)*100
         dt=datetime.strptime(date_str,"%Y-%m-%d")
         result.append({
             "date":dt.strftime("%a, %b %d"),
+            "date_key":date_str,
             "temp_min_f":round(min_f,1),"temp_max_f":round(max_f,1),"temp_avg_f":round(avg_f,1),
             "temp_min_c":round((min_f-32)*5/9,1),"temp_max_c":round((max_f-32)*5/9,1),
             "temp_avg_c":round((avg_f-32)*5/9,1),
@@ -168,28 +372,42 @@ def build_8day_forecast(items, base_f):
             "humidity":round(sum(i["main"]["humidity"] for i in day_items)/len(day_items)),
             "wind_mph":round(sum(i["wind"]["speed"] for i in day_items)/len(day_items),1),
         })
-    # Extrapolate remaining days up to 8 using sinusoidal variation
+    # Extrapolate beyond OWM range to reach `days` total
     base_c=(base_f-32)*5/9
-    today=datetime.utcnow()
-    while len(result)<8:
-        step=len(result)
-        d=today+timedelta(days=step)
+    # Determine the last OWM date so extrapolation continues from correct day
+    if result:
+        last_dt = datetime.strptime(result[-1]["date_key"], "%Y-%m-%d")
+    else:
+        last_dt = datetime.utcnow().replace(hour=0,minute=0,second=0,microsecond=0)
+    # Use last OWM avg as the extrapolation base
+    last_avg_f = result[-1]["temp_avg_f"] if result else base_f
+    ext_base_c = (last_avg_f-32)*5/9
+    while len(result)<days:
+        d = last_dt + timedelta(days=len(result)-len([r for r in result if "date_key" in r])+1)
+        # Simpler: just increment from last_dt
+        d = last_dt + timedelta(days=1)
+        last_dt = d
         swing=math.sin(d.timetuple().tm_yday/365*2*math.pi)*2
-        avg_c=base_c+swing+np.random.normal(0,0.5)
-        min_c=avg_c-3+np.random.normal(0,0.3)
-        max_c=avg_c+3+np.random.normal(0,0.3)
-        result.append({
-            "date":d.strftime("%a, %b %d"),
-            "temp_min_f":round(min_c*9/5+32,1),"temp_max_f":round(max_c*9/5+32,1),"temp_avg_f":round(avg_c*9/5+32,1),
-            "temp_min_c":round(min_c,1),"temp_max_c":round(max_c,1),"temp_avg_c":round(avg_c,1),
-            "description":"partly cloudy","icon":"02d","rain_prob":round(np.random.uniform(5,40)),
-            "humidity":round(np.random.uniform(50,75)),"wind_mph":round(np.random.uniform(5,15),1),
-        })
-    return result[:8]
+        avg_c=ext_base_c+swing+np.random.normal(0,0.3)
+        min_c=avg_c-3.5; max_c=avg_c+3.5
+        result.append({"date":d.strftime("%a, %b %d"),"date_key":d.strftime("%Y-%m-%d"),
+                        "temp_min_f":round(min_c*9/5+32,1),"temp_max_f":round(max_c*9/5+32,1),
+                        "temp_avg_f":round(avg_c*9/5+32,1),"temp_min_c":round(min_c,1),
+                        "temp_max_c":round(max_c,1),"temp_avg_c":round(avg_c,1),
+                        "description":"partly cloudy","icon":"02d",
+                        "rain_prob":round(np.random.uniform(5,35)),
+                        "humidity":round(np.random.uniform(50,75)),
+                        "wind_mph":round(np.random.uniform(5,15),1)})
+    return result[:days]
 
-def ml_forecast(temp_f, days=8):
-    base_c=(temp_f-32)*5/9
-    today=datetime.utcnow()
+def ml_forecast(temp_f, days=10, owm_forecast=None, db_stats=None):
+    """
+    ML 10-day forecast.
+    Dates come DIRECTLY from owm_forecast[step]["date"] so ML and OWM cards
+    always show the same day labels — no independent date arithmetic.
+    Min/max come from OWM real values; ML contributes a small avg adjustment.
+    """
+    base_c=(temp_f-32)*5/9; today=datetime.utcnow()
     history=[]
     for i in range(14,0,-1):
         d=today-timedelta(days=i)
@@ -200,29 +418,62 @@ def ml_forecast(temp_f, days=8):
            else "RandomForest" if "RandomForest" in MODELS else "Sinusoidal")
     forecasts=[]
     for step in range(days):
-        ts_date=today+timedelta(days=step+1)
         window=history[-14:]; w7=window[-7:]
-        row={f"lag_{l}": window[-l] if l<=len(window) else base_c for l in range(1,15)}
-        row.update({"rolling_mean_7":float(np.mean(w7)),"rolling_std_7":float(np.std(w7)),
-                    "rolling_mean_14":float(np.mean(window)),"rolling_min_7":float(np.min(w7)),
-                    "rolling_max_7":float(np.max(w7)),"dayofyear":ts_date.timetuple().tm_yday,
-                    "month":ts_date.month,"weekday":ts_date.weekday()})
-        if model:
-            try: pred_c=float(model.predict(pd.DataFrame([row]))[0])
-            except: pred_c=base_c+math.sin(ts_date.timetuple().tm_yday/365*2*math.pi)*2
+        if owm_forecast and step<len(owm_forecast):
+            # ── OWM day available: borrow its date + min/max exactly ──────────
+            owm_day  = owm_forecast[step]
+            date_lbl = owm_day["date"]          # e.g. "Tue, Jun 09" — same as OWM card
+            date_key = owm_day.get("date_key","")
+            ts_date  = (datetime.strptime(date_key,"%Y-%m-%d") if date_key
+                        else today+timedelta(days=step+1))
+            min_f    = owm_day["temp_min_f"]    # real OWM min
+            max_f    = owm_day["temp_max_f"]    # real OWM max
+            anchor_f = owm_day["temp_avg_f"]    # real OWM avg
+            anchor_c = (anchor_f-32)*5/9
+            # ML tiny delta on avg only (capped ±1°F so it stays close to OWM)
+            row={f"lag_{l}":window[-l] if l<=len(window) else base_c for l in range(1,15)}
+            row.update({"rolling_mean_7":float(np.mean(w7)),"rolling_std_7":float(np.std(w7)),
+                        "rolling_mean_14":float(np.mean(window)),"rolling_min_7":float(np.min(w7)),
+                        "rolling_max_7":float(np.max(w7)),"dayofyear":ts_date.timetuple().tm_yday,
+                        "month":ts_date.month,"weekday":ts_date.weekday()})
+            delta_f=0.0
+            if model:
+                try:
+                    ml_c=float(model.predict(pd.DataFrame([row]))[0])
+                    delta_f=float(np.clip((ml_c-base_c)*9/5,-1.0,1.0))
+                except: pass
+            avg_f = round(anchor_f+delta_f, 1)
+            avg_c = round((avg_f-32)*5/9, 1)
         else:
-            pred_c=base_c+math.sin(ts_date.timetuple().tm_yday/365*2*math.pi)*2
-        swing=np.random.normal(0,1.5)
-        history.append(pred_c)
+            # ── Beyond OWM range: pure ML, continue date sequence ─────────────
+            ts_date  = today+timedelta(days=step+1)
+            date_lbl = ts_date.strftime("%a, %b %d")
+            row={f"lag_{l}":window[-l] if l<=len(window) else base_c for l in range(1,15)}
+            row.update({"rolling_mean_7":float(np.mean(w7)),"rolling_std_7":float(np.std(w7)),
+                        "rolling_mean_14":float(np.mean(window)),"rolling_min_7":float(np.min(w7)),
+                        "rolling_max_7":float(np.max(w7)),"dayofyear":ts_date.timetuple().tm_yday,
+                        "month":ts_date.month,"weekday":ts_date.weekday()})
+            if model:
+                try:    avg_c=float(model.predict(pd.DataFrame([row]))[0])
+                except: avg_c=base_c+math.sin(ts_date.timetuple().tm_yday/365*2*math.pi)*2
+            else:
+                avg_c=base_c+math.sin(ts_date.timetuple().tm_yday/365*2*math.pi)*2
+            avg_f = round(avg_c*9/5+32, 1)
+            min_f = round(avg_f-5.5, 1)
+            max_f = round(avg_f+5.5, 1)
+        history.append(avg_c)
         forecasts.append({
-            "date":ts_date.strftime("%a, %b %d"),
-            "temp_c":round(pred_c,1),"temp_f":round(pred_c*9/5+32,1),
-            "temp_min_c":round(pred_c-abs(swing)-2,1),"temp_max_c":round(pred_c+abs(swing)+2,1),
-            "temp_min_f":round((pred_c-abs(swing)-2)*9/5+32,1),
-            "temp_max_f":round((pred_c+abs(swing)+2)*9/5+32,1),
+            "date":       date_lbl,             # always from OWM when OWM is available
+            "temp_c":     round(avg_c,1),
+            "temp_f":     avg_f,
+            "temp_min_f": round(min_f,1),
+            "temp_max_f": round(max_f,1),
+            "temp_min_c": round((min_f-32)*5/9,1),
+            "temp_max_c": round((max_f-32)*5/9,1),
         })
     return forecasts, mname
 
+# ── Analysis helpers ──────────────────────────────────────────────────────────
 def build_window(fc_list, current):
     rows=[{"dt":datetime.utcnow(),"temp_c":(current["temp_f"]-32)*5/9,
            "feels_c":(current["feels_like_f"]-32)*5/9,"humidity":current["humidity"],
@@ -236,20 +487,19 @@ def build_window(fc_list, current):
                      "pressure_mb":item["main"]["pressure"],"vis_km":item.get("visibility",10000)/1000})
     df=pd.DataFrame(rows)
     df["month"]=df["dt"].dt.month; df["hour"]=df["dt"].dt.hour
-    df["heat_index"]=df.apply(lambda r: heat_index(r["temp_c"],r["humidity"]),axis=1)
-    df["discomfort"]=df.apply(lambda r: discomfort_index(r["wind_mph"],r["humidity"]),axis=1)
+    df["heat_index"]=df.apply(lambda r:heat_index(r["temp_c"],r["humidity"]),axis=1)
+    df["discomfort"]=df.apply(lambda r:discomfort_index(r["wind_mph"],r["humidity"]),axis=1)
     df["temp_feels_diff"]=df["temp_c"]-df["feels_c"]
     return df
 
 def temp_stats(df):
-    t=df["temp_c"].dropna()
-    mn,mx=float(t.min()),float(t.max())
+    t=df["temp_c"].dropna(); mn,mx=float(t.min()),float(t.max())
     bins=np.linspace(mn,mx,11); counts,edges=np.histogram(t,bins=bins)
     return {"mean":round(float(t.mean()),2),"std":round(float(t.std()),2),
             "min":round(mn,2),"max":round(mx,2),"p25":round(float(t.quantile(.25)),2),
             "p50":round(float(t.quantile(.5)),2),"p75":round(float(t.quantile(.75)),2),
             "skewness":round(float(t.skew()),3),
-            "hist_labels":[f"{edges[i]:.1f}–{edges[i+1]:.1f}°C" for i in range(len(counts))],
+            "hist_labels":[f"{edges[i]*9/5+32:.1f}–{edges[i+1]*9/5+32:.1f}°F" for i in range(len(counts))],
             "hist_counts":counts.tolist()}
 
 def correlations(df):
@@ -263,12 +513,9 @@ def anomalies(df):
     for col,label in [("temp_c","Temperature"),("humidity","Humidity"),
                        ("wind_mph","Wind"),("pressure_mb","Pressure")]:
         if col not in df.columns: continue
-        s=df[col].dropna()
-        Q1,Q3=s.quantile(.25),s.quantile(.75); IQR=Q3-Q1
-        lower,upper=Q1-1.5*IQR,Q3+1.5*IQR
-        z=(s-s.mean())/(s.std()+1e-8)
-        result[label]={"iqr":int(((s<lower)|(s>upper)).sum()),
-                        "zscore":int((z.abs()>2).sum()),
+        s=df[col].dropna(); Q1,Q3=s.quantile(.25),s.quantile(.75); IQR=Q3-Q1
+        lower,upper=Q1-1.5*IQR,Q3+1.5*IQR; z=(s-s.mean())/(s.std()+1e-8)
+        result[label]={"iqr":int(((s<lower)|(s>upper)).sum()),"zscore":int((z.abs()>2).sum()),
                         "lower":round(float(lower),2),"upper":round(float(upper),2),
                         "mean":round(float(s.mean()),2),"std":round(float(s.std()),2)}
     return result
@@ -291,12 +538,10 @@ def trend_series(df):
             "discomfort":[round(v,2) for v in df_s["discomfort"].tolist()],
             "pressure":[round(v,1) for v in df_s["pressure_mb"].tolist()]}
 
-_cache: dict = {}
-_favs: list = []
-_recents: list = []
-
+_cache: dict={}; _mem_favs: list=[]; _mem_recents: list=[]
 def _cache_key(city): return city.lower().strip()
 
+# ── Routes ────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return open(Path(__file__).parent/"templates"/"index.html",encoding="utf-8").read()
@@ -307,77 +552,89 @@ def static_files(f): return send_from_directory("static",f)
 @app.route("/api/weather")
 def weather():
     city=request.args.get("city","").strip()
-    lat_q=request.args.get("lat","")
-    lon_q=request.args.get("lon","")
+    lat_q=request.args.get("lat",""); lon_q=request.args.get("lon","")
     if not city and not (lat_q and lon_q):
         return jsonify({"error":"City name or lat/lon required"}),400
+    # OpenCage forward geocode for better city resolution
+    geo_name=None
+    if city and ENABLE_GEOCODING and OPENCAGE_KEY:
+        geo=geocode_opencage(city)
+        if geo: geo_name=geo.get("city_name"); lat_q=str(geo["lat"]); lon_q=str(geo["lon"])
     try:
-        if lat_q and lon_q:
-            raw=fetch_current(lat=float(lat_q),lon=float(lon_q))
-        else:
-            raw=fetch_current(city=city)
+        if lat_q and lon_q: raw=fetch_current(lat=float(lat_q),lon=float(lon_q))
+        else: raw=fetch_current(city=city)
     except requests.exceptions.HTTPError as e:
         code=e.response.status_code if e.response else 500
-        if code==401: return jsonify({"error":"Invalid API key"}),502
+        if code==401: return jsonify({"error":"Invalid OpenWeather API key"}),502
         if code==404: return jsonify({"error":f'City "{city}" not found'}),404
         return jsonify({"error":"Weather service error"}),502
     except Exception as e: return jsonify({"error":str(e)}),500
-
     lat,lon=raw["coord"]["lat"],raw["coord"]["lon"]
     tf=raw["main"]["temp"]; tc=(tf-32)*5/9
     feels_f=raw["main"]["feels_like"]; feels_c=(feels_f-32)*5/9
     temp_diff=round(tc-feels_c,2)
-    diff_abs=abs(temp_diff)
-    diff_dir="warmer than perceived" if temp_diff>0 else "cooler than perceived" if temp_diff<0 else "matches perceived"
-    wind_speed=raw["wind"]["speed"]
-    wind_deg=raw["wind"].get("deg",0)
-    uv=fetch_uv(lat,lon)
-    uv_lbl,uv_col=uv_label(uv)
-
-    try: fc_raw=fetch_8day(lat,lon); fc_list=fc_raw["list"]; owm8=build_8day_forecast(fc_list,tf)
+    wind_speed=raw["wind"]["speed"]; wind_deg=raw["wind"].get("deg",0)
+    humidity=raw["main"]["humidity"]; cond=raw["weather"][0]["description"]
+    uv=fetch_uv(lat,lon); uv_lbl,uv_col=uv_label(uv)
+    # ── Correct local time using timezone offset ──
+    tz_offset=raw.get("timezone",0)
+    local_dt=datetime.utcnow()+timedelta(seconds=tz_offset)
+    local_time=local_dt.strftime("%I:%M %p, %a %b %d")
+    sunrise_ts=raw["sys"].get("sunrise",0); sunset_ts=raw["sys"].get("sunset",0)
+    sunrise_local=((datetime.utcfromtimestamp(sunrise_ts)+timedelta(seconds=tz_offset)).strftime("%I:%M %p") if sunrise_ts else "N/A")
+    sunset_local=((datetime.utcfromtimestamp(sunset_ts)+timedelta(seconds=tz_offset)).strftime("%I:%M %p") if sunset_ts else "N/A")
+    try:
+        fc_raw=fetch_8day(lat,lon); fc_list=fc_raw["list"]; owm8=build_8day_forecast(fc_list,tf,days=10)
     except: fc_list=[]; owm8=[]
     air=fetch_aqi(lat,lon); aqi_val=air["aqi"] if air else 0
     aqi_lbl,aqi_col=aqi_label(aqi_val)
-    fc_ml,mname=ml_forecast(tf,8)
-    cond=raw["weather"][0]["description"]
-    humidity=raw["main"]["humidity"]
-    sunrise_ts=raw["sys"].get("sunrise",0)
-    sunset_ts=raw["sys"].get("sunset",0)
-    tz_offset=raw.get("timezone",0)
-    sunrise_local=datetime.utcfromtimestamp(sunrise_ts+tz_offset).strftime("%H:%M") if sunrise_ts else "N/A"
-    sunset_local=datetime.utcfromtimestamp(sunset_ts+tz_offset).strftime("%H:%M") if sunset_ts else "N/A"
-    local_time=datetime.utcfromtimestamp(datetime.utcnow().timestamp()+tz_offset).strftime("%H:%M, %a %b %d")
-
+    # Use OpenCage city name if we got one, otherwise OWM name
+    city_name=geo_name or raw["name"]
+    # Fallback reverse geocode for geolocation button
+    if not city and lat_q and lon_q:
+        gc_name,_=reverse_geocode_opencage(lat,lon)
+        if gc_name: city_name=gc_name
+    db_stats=db_get_temp_stats(city_name)
+    fc_ml,mname=ml_forecast(tf,10,owm_forecast=owm8,db_stats=db_stats)
     current={"temp_f":round(tf,1),"temp_c":round(tc,1),
               "feels_like_f":round(feels_f,1),"feels_c":round(feels_c,1),
               "humidity":humidity,"wind_speed":wind_speed,"wind_deg":wind_deg,
-              "wind_dir":wind_dir_label(wind_deg),
-              "pressure":raw["main"]["pressure"],"visibility":raw.get("visibility",10000),
-              "description":cond,"icon":raw["weather"][0]["icon"],
-              "sunrise":sunrise_local,"sunset":sunset_local,"local_time":local_time,
-              "uv_index":uv,"uv_label":uv_lbl,"uv_color":uv_col}
+              "wind_dir":wind_dir_label(wind_deg),"pressure":raw["main"]["pressure"],
+              "visibility":raw.get("visibility",10000),"description":cond,
+              "icon":raw["weather"][0]["icon"],"sunrise":sunrise_local,"sunset":sunset_local,
+              "local_time":local_time,"uv_index":uv,"uv_label":uv_lbl,"uv_color":uv_col,
+              "dew_point_c":round(tc-(100-humidity)/5,1),
+              "dew_point_f":round((tc-(100-humidity)/5)*9/5+32,1)}
     hi_c=heat_index(tc,humidity); hi_f=round(hi_c*9/5+32,1)
+    # Feels-like diff in °F
+    diff_f=round(tf-feels_f,1)
     eng={"heat_index_f":hi_f,"heat_index_c":hi_c,
          "discomfort":discomfort_index(wind_speed,humidity),
-         "temp_feels_diff":temp_diff,"temp_feels_diff_abs":diff_abs,
-         "temp_feels_diff_dir":diff_dir,
+         "temp_feels_diff":temp_diff,"temp_feels_diff_f":diff_f,
+         "temp_feels_diff_abs_f":abs(diff_f),
+         "temp_feels_diff_dir":("warmer than perceived" if diff_f>0
+                                else "cooler than perceived" if diff_f<0
+                                else "matches perceived"),
          "feels_c":round(feels_c,1),"feels_f":round(feels_f,1),
          "pressure_cat":pressure_cat(current["pressure"]),
          "vis_cat":vis_cat(current["visibility"]/1000)}
-    alerts=build_alerts(tf,cond,aqi_val,uv,humidity,wind_speed)
-    city_name=raw["name"]
-    ck=_cache_key(city_name)
-    _cache[ck]={"fc_list":fc_list,"current":current,"lat":lat,"lon":lon}
-    if city_name not in _recents: _recents.insert(0,city_name)
-    if len(_recents)>8: _recents.pop()
-    payload={"city":city_name,"country":raw["sys"]["country"],"lat":lat,"lon":lon,
-              "current":current,"engineered":eng,"forecast_owm":owm8,"forecast_ml":fc_ml,
-              "model_used":mname,
-              "air_quality":{"aqi":aqi_val,"label":aqi_lbl,"color":aqi_col,
-                             "pm2_5":air["pm2_5"] if air else 0,"pm10":air["pm10"] if air else 0},
-              "alerts":alerts,"insight":build_insight(tf,cond,aqi_val,uv),
-              "owm_key":OPENWEATHER_KEY}
-    return jsonify(payload)
+    db_save_observation(city_name,raw["sys"]["country"],lat,lon,current,air)
+    db_add_recent(city_name)
+    entry={"fc_list":fc_list,"current":current,"lat":lat,"lon":lon}
+    _cache[_cache_key(city_name)]=entry
+    if city and _cache_key(city)!=_cache_key(city_name): _cache[_cache_key(city)]=entry
+    yt_videos=fetch_youtube(f"{city_name} weather forecast today") if ENABLE_YOUTUBE else []
+    return jsonify({"city":city_name,"country":raw["sys"]["country"],"lat":lat,"lon":lon,
+                    "current":current,"engineered":eng,"forecast_owm":owm8,"forecast_ml":fc_ml,
+                    "model_used":mname,"air_quality":{"aqi":aqi_val,"label":aqi_lbl,"color":aqi_col,
+                    "pm2_5":air["pm2_5"] if air else 0,"pm10":air["pm10"] if air else 0},
+                    "alerts":build_alerts(tf,cond,aqi_val,uv,humidity,wind_speed),
+                    "insight":build_insight(tf,cond,aqi_val,uv),"owm_key":OPENWEATHER_KEY,
+                    "db_stats":db_stats,"youtube":yt_videos,
+                    "services":{"geocoding":ENABLE_GEOCODING and bool(OPENCAGE_KEY),
+                                "air_quality":ENABLE_AIR_QUALITY,
+                                "youtube":ENABLE_YOUTUBE and bool(YOUTUBE_KEY),
+                                "database":bool(DATABASE_URL and _PG_AVAILABLE)}})
 
 @app.route("/api/analysis")
 def analysis():
@@ -399,12 +656,16 @@ def analysis():
         _cache[_cache_key(city)]=cached
     df=build_window(cached["fc_list"],cached["current"])
     ts=temp_stats(df); std=round(float(df["temp_c"].std()),2)
-    fc_ml,mname=ml_forecast(cached["current"]["temp_f"],8)
-    return jsonify({"temperature_stats":ts,"correlations":correlations(df),
-                    "anomalies":anomalies(df),"trend":trend_series(df),
-                    "feature_importance":feature_importance(),"model_metrics":MODEL_METRICS,
-                    "forecast_ml":fc_ml,"model_used":mname,
-                    "forecast_band":{"std":std,"mean":ts["mean"]}})
+    db_stats=db_get_temp_stats(city)
+    owm8=build_8day_forecast(cached["fc_list"],cached["current"]["temp_f"],days=10) if cached["fc_list"] else []
+    fc_ml,mname=ml_forecast(cached["current"]["temp_f"],10,owm_forecast=owm8,db_stats=db_stats)
+    if db_stats:
+        ts.update({"db_min_f":db_stats["min_f"],"db_max_f":db_stats["max_f"],
+                   "db_avg_f":db_stats["avg_f"],"db_count":db_stats["count"],"db_days":db_stats["days"]})
+    return jsonify({"temperature_stats":ts,"correlations":correlations(df),"anomalies":anomalies(df),
+                    "trend":trend_series(df),"feature_importance":feature_importance(),
+                    "model_metrics":MODEL_METRICS,"forecast_ml":fc_ml,"model_used":mname,
+                    "forecast_band":{"std":std,"mean":ts["mean"]},"db_stats":db_stats})
 
 @app.route("/api/forecast")
 def forecast_report():
@@ -413,10 +674,6 @@ def forecast_report():
     cached=_cache.get(_cache_key(city))
     if not cached:
         try: raw=fetch_current(city=city)
-        except requests.exceptions.HTTPError as e:
-            code=e.response.status_code if e.response else 500
-            if code==404: return jsonify({"error":f'City "{city}" not found'}),404
-            return jsonify({"error":"Weather service error"}),502
         except Exception as e: return jsonify({"error":str(e)}),500
         lat,lon=raw["coord"]["lat"],raw["coord"]["lon"]
         tf=raw["main"]["temp"]; feels_f=raw["main"]["feels_like"]
@@ -428,83 +685,97 @@ def forecast_report():
         except: fc_list=[]
         cached={"fc_list":fc_list,"current":current,"lat":lat,"lon":lon}
         _cache[_cache_key(city)]=cached
-    # build full report payload — same as before (reuse analysis data for charts)
     df=build_window(cached["fc_list"],cached["current"])
     ts=temp_stats(df); std=round(float(df["temp_c"].std()),2)
-    fc_ml,mname=ml_forecast(cached["current"]["temp_f"],8)
-    anoms=anomalies(df); corrs=correlations(df); tr=trend_series(df)
-    fi=feature_importance()
     lat=cached.get("lat",0); lon=cached.get("lon",0)
+    db_stats=db_get_temp_stats(city)
+    owm8=build_8day_forecast(cached["fc_list"],cached["current"]["temp_f"],days=10) if cached["fc_list"] else []
+    fc_ml,mname=ml_forecast(cached["current"]["temp_f"],10,owm_forecast=owm8,db_stats=db_stats)
     lat_zone=("Tropical (0–23°)" if abs(lat)<23 else "Subtropical (23–35°)" if abs(lat)<35
               else "Temperate (35–60°)" if abs(lat)<60 else "Polar/Subpolar (60°+)")
     season_map={12:"Winter",1:"Winter",2:"Winter",3:"Spring",4:"Spring",5:"Spring",
                 6:"Summer",7:"Summer",8:"Summer",9:"Autumn",10:"Autumn",11:"Autumn"}
     season=season_map.get(datetime.utcnow().month,"Unknown")
-    mm=MODEL_METRICS
-    cont_avgs=[
-        {"continent":"Africa","mean_temp_c":26.3,"humidity_pct":58.4,"lat":0,"lon":20},
-        {"continent":"Asia","mean_temp_c":19.7,"humidity_pct":64.2,"lat":34,"lon":100},
-        {"continent":"South America","mean_temp_c":22.1,"humidity_pct":71.8,"lat":-15,"lon":-60},
-        {"continent":"North America","mean_temp_c":14.3,"humidity_pct":60.1,"lat":45,"lon":-100},
-        {"continent":"Europe","mean_temp_c":11.2,"humidity_pct":68.7,"lat":50,"lon":15},
-        {"continent":"Oceania","mean_temp_c":17.8,"humidity_pct":63.5,"lat":-25,"lon":133},
-    ]
-    world_cities=[
-        {"city":"Kuwait City","lat":29.37,"lon":47.98,"temp_c":37.2,"humidity":35},
-        {"city":"Dubai","lat":25.20,"lon":55.27,"temp_c":35.9,"humidity":50},
-        {"city":"Delhi","lat":28.61,"lon":77.23,"temp_c":29.5,"humidity":68},
-        {"city":"Bangkok","lat":13.75,"lon":100.52,"temp_c":30.2,"humidity":75},
-        {"city":"Lagos","lat":6.45,"lon":3.39,"temp_c":28.3,"humidity":80},
-        {"city":"Cairo","lat":30.06,"lon":31.25,"temp_c":26.5,"humidity":42},
-        {"city":"São Paulo","lat":-23.55,"lon":-46.63,"temp_c":20.8,"humidity":72},
-        {"city":"London","lat":51.51,"lon":-0.13,"temp_c":11.2,"humidity":76},
-        {"city":"New York","lat":40.71,"lon":-74.01,"temp_c":13.5,"humidity":63},
-        {"city":"Sydney","lat":-33.87,"lon":151.21,"temp_c":18.2,"humidity":65},
-        {"city":"Moscow","lat":55.75,"lon":37.62,"temp_c":5.8,"humidity":74},
-        {"city":"Reykjavik","lat":64.14,"lon":-21.92,"temp_c":3.1,"humidity":82},
-        {"city":"Singapore","lat":1.35,"lon":103.82,"temp_c":28.5,"humidity":84},
-        {"city":"Nairobi","lat":-1.29,"lon":36.82,"temp_c":19.3,"humidity":65},
-        {"city":"Buenos Aires","lat":-34.60,"lon":-58.38,"temp_c":16.4,"humidity":70},
-    ]
-    return jsonify({
-        "city":city,"generated_at":datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-        "lat":lat,"lon":lon,"lat_zone":lat_zone,"season":season,
-        "temperature_stats":ts,"correlations":corrs,"anomalies":anoms,
-        "trend":tr,"feature_importance":fi,"model_metrics":mm,
-        "forecast_ml":fc_ml,"model_used":mname,"forecast_band":{"std":std,"mean":ts["mean"]},
-        "continental_averages":cont_avgs,"world_cities":world_cities,
-        "global_seasonal_avg":{
-            "Spring":{"temp_c":17.2,"humidity_pct":62.1,"wind_mph":8.4},
-            "Summer":{"temp_c":22.1,"humidity_pct":65.4,"wind_mph":7.9},
-            "Autumn":{"temp_c":16.8,"humidity_pct":63.8,"wind_mph":8.7},
-            "Winter":{"temp_c":10.4,"humidity_pct":67.2,"wind_mph":9.1},
-        },
-        "ai_insights":[
-            f"Lag features dominate — yesterday's temperature explains ~35% of variance (strong temporal autocorrelation).",
-            f"Tree-based ML (RF R²=0.823, XGBoost R²=0.818) vastly outperforms SARIMA (R²=−7.3) on globally aggregated data.",
-            f"Ensemble model achieves best MAPE (4.08%) combining RF+XGBoost+LightGBM.",
-            f"Isolation Forest flagged 5% of global records as multivariate anomalies — genuine extreme weather events.",
-            f"Air quality strongly weather-dependent: Ozone r=+0.42 with temperature; PM2.5 r=−0.31 with wind speed.",
-            f"{city} is in the {lat_zone} zone — {season} season patterns apply.",
-            f"Global gradient: ~0.65°C temperature drop per degree of latitude from equator.",
-        ]
-    })
+    return jsonify({"city":city,"generated_at":datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+                    "lat":lat,"lon":lon,"lat_zone":lat_zone,"season":season,
+                    "temperature_stats":ts,"correlations":correlations(df),"anomalies":anomalies(df),
+                    "trend":trend_series(df),"feature_importance":feature_importance(),
+                    "model_metrics":MODEL_METRICS,"forecast_ml":fc_ml,"model_used":mname,
+                    "forecast_band":{"std":std,"mean":ts["mean"]},"db_stats":db_stats,
+                    "continental_averages":[
+                        {"continent":"Africa","mean_temp_c":26.3,"humidity_pct":58.4,"lat":0,"lon":20},
+                        {"continent":"Asia","mean_temp_c":19.7,"humidity_pct":64.2,"lat":34,"lon":100},
+                        {"continent":"South America","mean_temp_c":22.1,"humidity_pct":71.8,"lat":-15,"lon":-60},
+                        {"continent":"North America","mean_temp_c":14.3,"humidity_pct":60.1,"lat":45,"lon":-100},
+                        {"continent":"Europe","mean_temp_c":11.2,"humidity_pct":68.7,"lat":50,"lon":15},
+                        {"continent":"Oceania","mean_temp_c":17.8,"humidity_pct":63.5,"lat":-25,"lon":133},
+                    ],
+                    "world_cities":[
+                        {"city":"Kuwait City","lat":29.37,"lon":47.98,"temp_c":37.2,"humidity":35},
+                        {"city":"Dubai","lat":25.20,"lon":55.27,"temp_c":35.9,"humidity":50},
+                        {"city":"Delhi","lat":28.61,"lon":77.23,"temp_c":29.5,"humidity":68},
+                        {"city":"Bangkok","lat":13.75,"lon":100.52,"temp_c":30.2,"humidity":75},
+                        {"city":"Lagos","lat":6.45,"lon":3.39,"temp_c":28.3,"humidity":80},
+                        {"city":"Cairo","lat":30.06,"lon":31.25,"temp_c":26.5,"humidity":42},
+                        {"city":"São Paulo","lat":-23.55,"lon":-46.63,"temp_c":20.8,"humidity":72},
+                        {"city":"London","lat":51.51,"lon":-0.13,"temp_c":11.2,"humidity":76},
+                        {"city":"New York","lat":40.71,"lon":-74.01,"temp_c":13.5,"humidity":63},
+                        {"city":"Sydney","lat":-33.87,"lon":151.21,"temp_c":18.2,"humidity":65},
+                        {"city":"Moscow","lat":55.75,"lon":37.62,"temp_c":5.8,"humidity":74},
+                        {"city":"Reykjavik","lat":64.14,"lon":-21.92,"temp_c":3.1,"humidity":82},
+                        {"city":"Singapore","lat":1.35,"lon":103.82,"temp_c":28.5,"humidity":84},
+                        {"city":"Nairobi","lat":-1.29,"lon":36.82,"temp_c":19.3,"humidity":65},
+                        {"city":"Buenos Aires","lat":-34.60,"lon":-58.38,"temp_c":16.4,"humidity":70},
+                    ],
+                    "global_seasonal_avg":{"Spring":{"temp_c":17.2,"humidity_pct":62.1,"wind_mph":8.4},
+                                           "Summer":{"temp_c":22.1,"humidity_pct":65.4,"wind_mph":7.9},
+                                           "Autumn":{"temp_c":16.8,"humidity_pct":63.8,"wind_mph":8.7},
+                                           "Winter":{"temp_c":10.4,"humidity_pct":67.2,"wind_mph":9.1}},
+                    "ai_insights":["Lag features dominate — yesterday's temperature explains ~35% of variance.",
+                                   "Tree-based ML vastly outperforms SARIMA.",
+                                   "Ensemble model achieves best MAPE (4.08%).",
+                                   f"{city} is in the {lat_zone} zone — {season} season patterns apply.",
+                                   *(([f"DB historical ({db_stats['count']} obs): min {db_stats['min_f']}°F / avg {db_stats['avg_f']}°F / max {db_stats['max_f']}°F"] if db_stats else []))]})
 
-@app.route("/api/favorites", methods=["GET","POST","DELETE"])
+@app.route("/api/favorites",methods=["GET","POST","DELETE"])
 def favorites():
-    global _favs
-    if request.method=="GET": return jsonify({"favorites":_favs,"recents":_recents})
+    if request.method=="GET":
+        return jsonify({"favorites":db_get_favorites() or _mem_favs,"recents":db_get_recents() or _mem_recents})
     if request.method=="POST":
-        city=request.json.get("city","").strip()
-        if city and city not in _favs: _favs.insert(0,city)
-        return jsonify({"favorites":_favs})
+        city=(request.json or {}).get("city","").strip()
+        if city:
+            db_add_favorite(city)
+            if city not in _mem_favs: _mem_favs.insert(0,city)
+        return jsonify({"favorites":db_get_favorites() or _mem_favs})
     city=request.args.get("city","").strip()
-    _favs=[f for f in _favs if f!=city]
-    return jsonify({"favorites":_favs})
+    if city:
+        db_remove_favorite(city); _mem_favs[:]=[ f for f in _mem_favs if f!=city]
+    return jsonify({"favorites":db_get_favorites() or _mem_favs})
+
+@app.route("/api/youtube")
+def youtube():
+    query=request.args.get("q","").strip()
+    if not query: return jsonify({"error":"q param required"}),400
+    return jsonify({"videos":fetch_youtube(query)})
+
+@app.route("/api/history")
+def history():
+    city=request.args.get("city","").strip()
+    if not city: return jsonify({"error":"city required"}),400
+    return jsonify({"city":city,"stats":db_get_temp_stats(city)})
 
 @app.route("/api/health")
 def health():
-    return jsonify({"status":"ok","models":list(MODELS.keys()),"api_key":bool(OPENWEATHER_KEY)})
+    conn=_get_conn(); db_ok=False
+    if conn:
+        try:
+            with conn.cursor() as cur: cur.execute("SELECT 1")
+            db_ok=True
+        except: pass
+        finally: conn.close()
+    return jsonify({"status":"ok","models":list(MODELS.keys()),
+                    "services":{"openweather":bool(OPENWEATHER_KEY),"opencage":bool(OPENCAGE_KEY),
+                                "youtube":bool(YOUTUBE_KEY),"database":db_ok,"air_quality":ENABLE_AIR_QUALITY}})
 
 if __name__=="__main__":
     app.run(debug=True,port=int(os.getenv("PORT",5000)))
