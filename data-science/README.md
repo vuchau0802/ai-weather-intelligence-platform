@@ -224,5 +224,10 @@ Open `weather_forecasting.ipynb` in JupyterLab or Jupyter Notebook.
 
 ---
 
+## Demo
+
+![Chat Interface](demo/1.png)
+
+![Chat Interface](demo/2.png)
 
 
