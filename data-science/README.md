@@ -188,3 +188,41 @@ Top predictors of `temperature_celsius`:
 - **Highest precipitation**: Southeast Asia, West Africa.
 - **Continent comparison**: Africa highest mean temp; Europe widest seasonal swing.
 
+---
+
+## Running the Project
+
+### Setup & Installation
+
+```bash
+# 1. Clone or unzip the project
+cd WeatherForecastingReport
+
+# 2. Create a virtual environment
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+
+# macOS/Linux
+source .venv/bin/activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+```
+
+### Interactive web dashboard:
+
+```bash
+python app.py
+# Open http://localhost:5000
+```
+
+### Jupyter Notebook (pre-executed):
+
+Open `weather_forecasting.ipynb` in JupyterLab or Jupyter Notebook.
+
+---
+
+
+
