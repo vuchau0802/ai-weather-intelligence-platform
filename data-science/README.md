@@ -196,7 +196,7 @@ Top predictors of `temperature_celsius`:
 
 ```bash
 # 1. Clone or unzip the project
-cd WeatherForecastingReport
+cd data-science
 
 # 2. Create a virtual environment
 python -m venv .venv
