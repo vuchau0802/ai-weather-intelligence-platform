@@ -1,17 +1,5 @@
 # Weather Trend Forecasting — Global Weather Repository Analysis
 
-**PM Accelerator Data Science / Analyst Technical Assessment**
-
----
-
-## PM Accelerator Mission
-
-> *"Our mission is to break down financial barriers and achieve educational fairness. With the goal of establishing 200 schools worldwide over the next 20 years, we aim to empower more kids for a better future in their life and career, simultaneously fostering a diverse landscape in the tech industry."*
->
-> — [pmaccelerator.io](https://www.pmaccelerator.io/about-us)
-
-PM Accelerator (founded by Dr. Nancy Li) helps aspiring and current Product Managers land roles at top-tier tech companies — even with zero prior PM experience — through certified programs, 1:1 coaching, and a global alumni community of 1,500+ professionals.
-
 ---
 
 ## Project Overview
