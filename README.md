@@ -1,6 +1,6 @@
 # AI Weather Intelligence Platform
 
-A full-stack weather intelligence application that provides real-time weather data, a 5-day forecast, search history management, weather analytics, air quality insights, travel videos, and interactive visualizations using modern web technologies.
+A full-stack weather intelligence application that provides real-time weather data, a 7-day forecast, search history management, weather analytics, air quality insights, travel videos, and interactive visualizations using modern web technologies.
 
 ---
 
@@ -97,11 +97,3 @@ npm run dev
 
 # Frontend is now running at http://localhost:3000
 ```
-
----
-
-## Error Handling
-
-- The app handles errors gracefully by showing clear messages to the user instead of failing silently. For example, if the user searches without entering a city, the app displays a “City required” message. If the user enters an invalid or unknown city, the backend returns a 404 response and the frontend shows “City not found” with guidance to check the spelling and try again.
-
-- The app also handles API failures. If the weather service is unavailable or the API key is rejected, the backend returns a clean error response, and the frontend displays “Weather request failed” so the user understands the problem and can try again later.
